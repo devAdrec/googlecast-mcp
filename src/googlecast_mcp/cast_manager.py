@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 from typing import Any
+from uuid import UUID
 
 import pychromecast
 
@@ -104,6 +105,12 @@ class CastManager:
         if found is not None:
             return found
 
+        # mDNS is lossy; a device that answered a previous scan may be missed
+        # by this one. Connect straight to its saved address before rescanning.
+        found = self._connect_saved(target)
+        if found is not None:
+            return found
+
         self.discover()
         found = self._resolve_locally(target)
         if found is not None:
@@ -111,8 +118,36 @@ class CastManager:
 
         known = ", ".join(sorted(d["friendly_name"] for d in self.list_cached())) or "none"
         raise DeviceNotFoundError(
-            f"Device {target!r} not found on the network. Known devices: {known}."
+            f"Device {target!r} did not respond. Known devices: {known}."
         )
+
+    def _connect_saved(self, target: str) -> Any | None:
+        """Connect by the address saved in the store, bypassing discovery."""
+        lowered = target.strip().lower()
+        for device in self._store.load():
+            if lowered not in (
+                str(device.get("uuid", "")).lower(),
+                str(device.get("friendly_name", "")).lower(),
+            ):
+                continue
+            try:
+                cast = pychromecast.get_chromecast_from_host(
+                    (
+                        device["host"],
+                        device["port"],
+                        UUID(device["uuid"]),
+                        device.get("model_name"),
+                        device.get("friendly_name"),
+                    ),
+                    tries=1,
+                    timeout=5,
+                )
+            except Exception:
+                return None  # stale address; the caller falls back to a rescan
+            with self._lock:
+                self._devices[str(cast.cast_info.uuid)] = cast
+            return cast
+        return None
 
     def _resolve_locally(self, target: str) -> Any | None:
         """Match ``target`` against the live device cache, or None."""
