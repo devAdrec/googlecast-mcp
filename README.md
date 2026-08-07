@@ -83,6 +83,26 @@ plain-HTTP server on the LAN cannot be pasted there. Bridge it with the
 
 This needs Node.js on the client machine. Restart Claude Desktop afterwards.
 
+### Clients that are stricter than the spec
+
+By default the server answers even a single request with an SSE-framed body
+(`event: message`) and hands out an `Mcp-Session-Id` that clients must echo
+back. Both are legal, but simpler MCP clients — llama-server's, for one —
+choke on them and report a bare "protocol error". Two flags relax it:
+
+```bash
+googlecast-mcp --transport http --json-response --stateless
+```
+
+`--json-response` replies with `application/json`; `--stateless` drops the
+session requirement, so a lone `tools/call` works with no handshake. Standard
+clients (Claude Desktop, Claude Code) work in this mode too, so it is a safe
+default when several kinds of client share one server:
+
+```bash
+MCP_EXTRA_ARGS="--json-response --stateless" ./scripts/service.sh install
+```
+
 ### Behind a reverse proxy (https)
 
 To use the custom-connector field instead, front the server with nginx and a
@@ -172,6 +192,7 @@ as returned by `discover_devices`.
 | `421 Misdirected Request` | The `Host` header is not trusted. Add the name with `--allow-host`. |
 | `Execution of wait timed out after 10 s` for one device | That device is not accepting cast connections. Check with `nc -z <ip> 8009`; a Nest Hub in this state comes back after a reboot. |
 | Client connects but calls hang | A proxy is buffering the stream. Set `proxy_buffering off`. |
+| A client reports a generic "protocol error" | It likely cannot parse SSE framing or does not carry the session header. Start the server with `--json-response --stateless`. |
 | `say` returns `needs_speaker_selection` | Working as intended: no `target` was given, so nothing was played. |
 | No speaker found | The server is not on the speakers' LAN, or mDNS is blocked between VLANs. |
 | Speaker accepts the cast but stays silent | It cannot reach the audio port. Check the firewall, and that the advertised URL uses a LAN address. |

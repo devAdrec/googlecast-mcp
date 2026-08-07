@@ -83,6 +83,22 @@ def main() -> None:
             "allowed."
         ),
     )
+    parser.add_argument(
+        "--json-response",
+        action="store_true",
+        help=(
+            "Reply with plain JSON instead of an SSE-framed body. Simple MCP "
+            "clients that cannot parse 'event: message' framing need this."
+        ),
+    )
+    parser.add_argument(
+        "--stateless",
+        action="store_true",
+        help=(
+            "Do not require clients to carry an Mcp-Session-Id between "
+            "requests. Needed by clients that ignore the session header."
+        ),
+    )
     args = parser.parse_args()
 
     if args.media_port is not None:
@@ -92,6 +108,8 @@ def main() -> None:
         mcp.settings.host = args.host
         mcp.settings.port = args.port
         mcp.settings.transport_security = _transport_security(args.host, args.allow_host)
+        mcp.settings.json_response = args.json_response
+        mcp.settings.stateless_http = args.stateless
 
     transport = "streamable-http" if args.transport == "http" else args.transport
     try:
