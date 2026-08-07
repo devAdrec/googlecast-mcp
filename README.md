@@ -96,6 +96,9 @@ The server must trust the proxied domain, or it returns 421:
 MCP_EXTRA_ARGS="--allow-host cast.example.com" ./scripts/service.sh install
 ```
 
+The hostname must not contain an underscore — public CAs refuse to issue
+certificates for such names, so no `https` URL is possible for one.
+
 Proxy **only** the MCP port. The audio port stays LAN-internal: the speakers
 fetch from it directly by IP.
 
