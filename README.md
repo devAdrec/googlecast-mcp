@@ -33,7 +33,58 @@ uv run googlecast-mcp --transport http --host 0.0.0.0 --port 8000
 uv run googlecast-mcp --transport sse
 ```
 
-## Client configuration (stdio)
+## Running as a service
+
+On a home server that stays on, run it as a systemd service over HTTP so
+clients on other machines can use it:
+
+```bash
+./scripts/service.sh install     # write the unit, enable at boot, start it
+./scripts/service.sh status      # is it running?
+./scripts/service.sh logs        # follow the journal
+./scripts/service.sh stop        # / start / restart
+./scripts/service.sh remove      # stop, disable, delete the unit
+```
+
+`install` needs `sudo` (it writes `/etc/systemd/system/`) and defaults to MCP
+on port `8765` and audio on port `8766`. Override with environment variables:
+
+```bash
+MCP_PORT=9000 MEDIA_PORT=9001 ./scripts/service.sh install
+```
+
+The service must run on a machine on the **same LAN as the speakers**:
+discovery uses mDNS, and the speakers fetch the audio back from it. Allow both
+ports through the firewall if one is active.
+
+## Client configuration (remote, over HTTP)
+
+Point the client at the service's LAN address:
+
+```
+http://<server-ip>:8765/mcp
+```
+
+In Claude Desktop: **Settings → Connectors → Add custom connector**, and paste
+that URL. For clients that only speak stdio, proxy it:
+
+```json
+{
+  "mcpServers": {
+    "googlecast": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://<server-ip>:8765/mcp", "--allow-http"]
+    }
+  }
+}
+```
+
+The MCP SDK rejects requests whose `Host` header it does not trust (a
+DNS-rebinding defence), answering `421 Misdirected Request`. Loopback and this
+machine's LAN address are allowed automatically; if clients reach the server
+under another name, add it with `--allow-host myserver.local`.
+
+## Client configuration (local, stdio)
 
 Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`):
 
@@ -78,8 +129,8 @@ as returned by `discover_devices`.
 - Synthesis needs internet access (Microsoft Edge neural voices, no API key).
   Rendered mp3s are cached, so repeating a phrase is instant.
 - The speaker fetches the audio from a small HTTP server this process starts on
-  your LAN address, on a random port. Your firewall must allow that port from
-  the local network.
+  your LAN address. The port is random by default; pin it with `--media-port`
+  (or `GOOGLECAST_MCP_MEDIA_PORT`) so a firewall rule can be written once.
 
 ### Notes
 
@@ -102,7 +153,9 @@ as returned by `discover_devices`.
   cannot read local file paths, so the audio must be served to them.
 - `server.py` — FastMCP tool definitions; offloads each blocking call to a
   worker thread via `asyncio.to_thread`.
-- `__main__.py` — CLI entrypoint; selects transport and handles clean shutdown.
+- `__main__.py` — CLI entrypoint; selects transport, widens the SDK's trusted
+  hosts to the LAN, and handles clean shutdown.
+- `scripts/service.sh` — systemd install/remove/start/stop/restart/status/logs.
 
 ## License
 

@@ -7,6 +7,7 @@ thread via ``asyncio.to_thread`` to keep the MCP event loop responsive.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -17,7 +18,12 @@ from .media_server import MediaServer
 
 mcp = FastMCP("googlecast-mcp")
 _manager = CastManager()
-_media_server = MediaServer(tts.default_cache_dir())
+# Port 0 picks a free port; pin it (env var or --media-port) when running
+# behind a firewall so the rule can be written once.
+_media_server = MediaServer(
+    tts.default_cache_dir(),
+    port=int(os.environ.get("GOOGLECAST_MCP_MEDIA_PORT", "0")),
+)
 
 # Targets that mean "every speaker", in English and Vietnamese.
 _ALL_KEYWORDS = {"all", "tất cả", "tat ca", "everyone", "*"}

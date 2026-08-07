@@ -11,7 +11,30 @@ from __future__ import annotations
 
 import argparse
 
+from mcp.server.transport_security import TransportSecuritySettings
+
+from .media_server import lan_ip
 from .server import _manager, _media_server, mcp
+
+
+def _transport_security(bind_host: str, extra_hosts: list[str]) -> TransportSecuritySettings:
+    """Allow LAN clients through the SDK's DNS-rebinding protection.
+
+    The SDK only trusts loopback by default, so a remote MCP client is
+    answered with 421 Misdirected Request. Rather than disabling the check,
+    this widens it to the addresses this host is actually reachable at.
+    """
+    hosts = ["127.0.0.1", "localhost", "[::1]", lan_ip()]
+    # A wildcard bind is not itself an address clients connect to.
+    if bind_host not in ("0.0.0.0", "::"):
+        hosts.append(bind_host)
+    hosts.extend(extra_hosts)
+
+    unique = list(dict.fromkeys(h for h in hosts if h))
+    return TransportSecuritySettings(
+        allowed_hosts=[f"{h}:*" for h in unique],
+        allowed_origins=[f"http://{h}:*" for h in unique],
+    )
 
 
 def main() -> None:
@@ -33,11 +56,35 @@ def main() -> None:
         default=8000,
         help="Bind port for http/sse transports (default: 8000).",
     )
+    parser.add_argument(
+        "--media-port",
+        type=int,
+        default=None,
+        help=(
+            "Fixed port for the HTTP server that hands TTS audio to speakers "
+            "(default: a random free port). Pin it to write one firewall rule."
+        ),
+    )
+    parser.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="HOST",
+        help=(
+            "Extra hostname or IP that clients may use to reach this server "
+            "(repeatable). Loopback and this machine's LAN address are always "
+            "allowed."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.media_port is not None:
+        _media_server.set_port(args.media_port)
 
     if args.transport in ("http", "sse"):
         mcp.settings.host = args.host
         mcp.settings.port = args.port
+        mcp.settings.transport_security = _transport_security(args.host, args.allow_host)
 
     transport = "streamable-http" if args.transport == "http" else args.transport
     try:

@@ -53,6 +53,17 @@ class MediaServer:
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
+    def set_port(self, port: int) -> None:
+        """Pin the listening port. Must be called before the server starts.
+
+        A fixed port matters when the server runs as a daemon behind a
+        firewall: the speakers must be able to reach it at a known address.
+        """
+        with self._lock:
+            if self._httpd is not None:
+                raise RuntimeError("cannot change port while the media server is running")
+            self._requested_port = port
+
     def start(self) -> None:
         """Start the server if it is not already running."""
         with self._lock:
