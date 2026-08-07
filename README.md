@@ -65,8 +65,10 @@ Point the client at the service's LAN address:
 http://<server-ip>:8765/mcp
 ```
 
-In Claude Desktop: **Settings → Connectors → Add custom connector**, and paste
-that URL. For clients that only speak stdio, proxy it:
+Claude Desktop's **Add custom connector** field only accepts `https` URLs, so a
+plain-HTTP server on the LAN cannot be pasted there. Bridge it with the
+`mcp-remote` stdio proxy instead — add this to `claude_desktop_config.json`
+(**Settings → Developer → Edit Config**) on the client machine:
 
 ```json
 {
@@ -78,6 +80,8 @@ that URL. For clients that only speak stdio, proxy it:
   }
 }
 ```
+
+This needs Node.js on the client machine. Restart Claude Desktop afterwards.
 
 The MCP SDK rejects requests whose `Host` header it does not trust (a
 DNS-rebinding defence), answering `421 Misdirected Request`. Loopback and this
