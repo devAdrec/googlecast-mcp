@@ -87,25 +87,26 @@ This needs Node.js on the client machine. Restart Claude Desktop afterwards.
 
 To use the custom-connector field instead, front the server with nginx and a
 real certificate. A working vhost is in
-[`scripts/nginx-googlecast-mcp.conf`](scripts/nginx-googlecast-mcp.conf);
-streaming responses need `proxy_buffering off` and long timeouts.
+[`scripts/nginx-googlecast-mcp.conf`](scripts/nginx-googlecast-mcp.conf).
+Three things are easy to get wrong:
 
-The server must trust the proxied domain, or it returns 421:
+1. **Proxy only the MCP port.** The audio port stays LAN-internal — the
+   speakers fetch from it directly by IP.
+2. **Turn off buffering** (`proxy_buffering off`) and raise the timeouts.
+   Streamable HTTP holds the response open and pushes events; nginx would
+   otherwise buffer them and the client just hangs.
+3. **Trust the domain**, or the server answers `421 Misdirected Request`:
 
-```bash
-MCP_EXTRA_ARGS="--allow-host cast.example.com" ./scripts/service.sh install
-```
+   ```bash
+   MCP_EXTRA_ARGS="--allow-host cast.example.com" ./scripts/service.sh install
+   ```
 
 The hostname must not contain an underscore — public CAs refuse to issue
 certificates for such names, so no `https` URL is possible for one.
 
-Proxy **only** the MCP port. The audio port stays LAN-internal: the speakers
-fetch from it directly by IP.
-
-The MCP SDK rejects requests whose `Host` header it does not trust (a
-DNS-rebinding defence), answering `421 Misdirected Request`. Loopback and this
-machine's LAN address are allowed automatically; if clients reach the server
-under another name, add it with `--allow-host myserver.local`.
+> **The endpoint has no authentication.** Anyone who can reach `/mcp` can play
+> audio in the house. On a publicly resolvable domain, restrict it in nginx
+> (`allow 192.168.0.0/16; deny all;`) unless remote access is genuinely wanted.
 
 ## Client configuration (local, stdio)
 
@@ -163,7 +164,23 @@ as returned by `discover_devices`.
   explicitly for streams without a recognizable extension (e.g. HLS behind a
   query string).
 
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `Not Acceptable: Client must accept text/event-stream` | You opened `/mcp` in a browser. Expected — the endpoint is not browsable, and this reply means the server is healthy. |
+| `421 Misdirected Request` | The `Host` header is not trusted. Add the name with `--allow-host`. |
+| `Execution of wait timed out after 10 s` for one device | That device is not accepting cast connections. Check with `nc -z <ip> 8009`; a Nest Hub in this state comes back after a reboot. |
+| Client connects but calls hang | A proxy is buffering the stream. Set `proxy_buffering off`. |
+| `say` returns `needs_speaker_selection` | Working as intended: no `target` was given, so nothing was played. |
+| No speaker found | The server is not on the speakers' LAN, or mDNS is blocked between VLANs. |
+| Speaker accepts the cast but stays silent | It cannot reach the audio port. Check the firewall, and that the advertised URL uses a LAN address. |
+
 ## Architecture
+
+See [`docs/architecture.md`](docs/architecture.md) for the request flow, the
+design decisions behind each module, and the deployment notes.
+
 
 - `cast_manager.py` — thread-safe wrapper over `pychromecast`; owns discovery,
   the connected-device cache, and synchronous control methods.
