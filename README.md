@@ -175,6 +175,7 @@ as returned by `discover_devices`.
 | `say` returns `needs_speaker_selection` | Working as intended: no `target` was given, so nothing was played. |
 | No speaker found | The server is not on the speakers' LAN, or mDNS is blocked between VLANs. |
 | Speaker accepts the cast but stays silent | It cannot reach the audio port. Check the firewall, and that the advertised URL uses a LAN address. |
+| Screen flashes, audio cuts short | Poll `get_status` while it plays. `player_state=PLAYING` for the full `duration` ending in `idle_reason=FINISHED` means the cast side is fine — suspect the device (volume, or an unstable state after a reboot). |
 
 ## Architecture
 
