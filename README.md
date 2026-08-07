@@ -83,6 +83,22 @@ plain-HTTP server on the LAN cannot be pasted there. Bridge it with the
 
 This needs Node.js on the client machine. Restart Claude Desktop afterwards.
 
+### Behind a reverse proxy (https)
+
+To use the custom-connector field instead, front the server with nginx and a
+real certificate. A working vhost is in
+[`scripts/nginx-googlecast-mcp.conf`](scripts/nginx-googlecast-mcp.conf);
+streaming responses need `proxy_buffering off` and long timeouts.
+
+The server must trust the proxied domain, or it returns 421:
+
+```bash
+MCP_EXTRA_ARGS="--allow-host cast.example.com" ./scripts/service.sh install
+```
+
+Proxy **only** the MCP port. The audio port stays LAN-internal: the speakers
+fetch from it directly by IP.
+
 The MCP SDK rejects requests whose `Host` header it does not trust (a
 DNS-rebinding defence), answering `421 Misdirected Request`. Loopback and this
 machine's LAN address are allowed automatically; if clients reach the server

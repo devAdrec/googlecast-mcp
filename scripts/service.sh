@@ -27,6 +27,9 @@ MCP_HOST="${MCP_HOST:-0.0.0.0}"
 MCP_PORT="${MCP_PORT:-8765}"
 # Fixed port for serving TTS audio to the speakers; keeps firewall rules simple.
 MEDIA_PORT="${MEDIA_PORT:-8766}"
+# Extra flags, e.g. MCP_EXTRA_ARGS="--allow-host cast.example.com" when a
+# reverse proxy fronts the server under a domain name.
+MCP_EXTRA_ARGS="${MCP_EXTRA_ARGS:-}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -62,7 +65,7 @@ WorkingDirectory=$PROJECT_DIR
 Environment=HOME=$HOME
 Environment=GOOGLECAST_MCP_MEDIA_PORT=$MEDIA_PORT
 ExecStart=$UV_BIN run --directory $PROJECT_DIR googlecast-mcp \\
-    --transport http --host $MCP_HOST --port $MCP_PORT
+    --transport http --host $MCP_HOST --port $MCP_PORT $MCP_EXTRA_ARGS
 Restart=on-failure
 RestartSec=5
 

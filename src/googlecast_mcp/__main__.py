@@ -32,8 +32,15 @@ def _transport_security(bind_host: str, extra_hosts: list[str]) -> TransportSecu
 
     unique = list(dict.fromkeys(h for h in hosts if h))
     return TransportSecuritySettings(
-        allowed_hosts=[f"{h}:*" for h in unique],
-        allowed_origins=[f"http://{h}:*" for h in unique],
+        # Bare host too: a proxy on the default port sends no ":port" suffix.
+        allowed_hosts=[p for h in unique for p in (h, f"{h}:*")],
+        # https as well, for when a reverse proxy terminates TLS in front.
+        allowed_origins=[
+            f"{scheme}://{h}{suffix}"
+            for h in unique
+            for scheme in ("http", "https")
+            for suffix in ("", ":*")
+        ],
     )
 
 
