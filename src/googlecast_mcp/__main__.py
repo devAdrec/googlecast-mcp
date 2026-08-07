@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 
-from .server import _manager, mcp
+from .server import _manager, _media_server, mcp
 
 
 def main() -> None:
@@ -43,6 +43,7 @@ def main() -> None:
     try:
         mcp.run(transport=transport)
     finally:
+        _media_server.stop()
         _manager.close()
 
 

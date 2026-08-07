@@ -1,8 +1,15 @@
 # googlecast-mcp
 
-An [MCP](https://modelcontextprotocol.io) server for discovering and controlling
-Google Cast (Chromecast) devices on your local network, built on
-[`pychromecast`](https://github.com/home-assistant-libs/pychromecast).
+An [MCP](https://modelcontextprotocol.io) server that finds the Google speakers
+on your local network and **speaks text out loud on them, in Vietnamese**, built
+on [`pychromecast`](https://github.com/home-assistant-libs/pychromecast) and
+[`edge-tts`](https://github.com/rany2/edge-tts).
+
+```
+say("Cơm đã chín rồi", target="Kitchen speaker")
+```
+
+It also exposes the usual Cast media controls (play a URL, pause, volume, …).
 
 ## Requirements
 
@@ -45,8 +52,10 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
 
 | Tool | Purpose |
 |------|---------|
-| `discover_devices(timeout=5.0)` | Scan the network for Cast devices. **Run this first.** |
-| `list_devices()` | List devices already discovered this session (no re-scan). |
+| `say(text, target?, voice="female", rate="+0%")` | **Speak text out loud.** Omit `target` to be asked which speaker. |
+| `discover_devices(timeout=5.0)` | Scan the network for Cast devices and save them. |
+| `list_speakers()` | Saved speakers and speaker groups only (no TVs); scans if empty. |
+| `list_devices()` | All known devices, live + saved. |
 | `get_status(target)` | Current app + media status of a device. |
 | `play_media(target, url, content_type?, title?)` | Cast a media URL and start playback. |
 | `play(target)` / `pause(target)` / `stop(target)` | Playback control. |
@@ -57,6 +66,20 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
 
 `target` is a device **friendly name** (e.g. `"Living Room TV"`) or its **uuid**,
 as returned by `discover_devices`.
+
+### Speaking text (`say`)
+
+- `target` accepts one speaker, several separated by commas, or `"all"` /
+  `"tất cả"` for every speaker.
+- **Omitting `target` never plays anything.** The tool returns the speaker list
+  and asks the client to have the user pick one.
+- `voice` is `"female"` (`vi-VN-HoaiMyNeural`, default), `"male"`
+  (`vi-VN-NamMinhNeural`), or any full edge-tts voice id.
+- Synthesis needs internet access (Microsoft Edge neural voices, no API key).
+  Rendered mp3s are cached, so repeating a phrase is instant.
+- The speaker fetches the audio from a small HTTP server this process starts on
+  your LAN address, on a random port. Your firewall must allow that port from
+  the local network.
 
 ### Notes
 
@@ -70,6 +93,13 @@ as returned by `discover_devices`.
 
 - `cast_manager.py` — thread-safe wrapper over `pychromecast`; owns discovery,
   the connected-device cache, and synchronous control methods.
+- `speaker_store.py` — persists discovered devices to
+  `~/.googlecast-mcp/speakers.json` (override with `GOOGLECAST_MCP_STORE`), so a
+  fresh process still knows the speakers.
+- `tts.py` — Vietnamese text → mp3 via edge-tts, cached on disk (override the
+  cache location with `GOOGLECAST_MCP_CACHE`).
+- `media_server.py` — background HTTP server on the LAN address; Cast devices
+  cannot read local file paths, so the audio must be served to them.
 - `server.py` — FastMCP tool definitions; offloads each blocking call to a
   worker thread via `asyncio.to_thread`.
 - `__main__.py` — CLI entrypoint; selects transport and handles clean shutdown.

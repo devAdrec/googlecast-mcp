@@ -11,6 +11,8 @@ dependencies = [
     # layout and dependencies (httpx2, mcp-types) do not match this SDK.
     "mcp[cli]>=1.13,<2",
     "pychromecast>=14.0.0",
+    # Vietnamese neural text-to-speech; no API key required.
+    "edge-tts>=7.0.0",
 ]
 
 [project.scripts]

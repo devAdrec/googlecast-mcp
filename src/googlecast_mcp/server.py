@@ -11,10 +11,16 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from . import tts
 from .cast_manager import CastManager
+from .media_server import MediaServer
 
 mcp = FastMCP("googlecast-mcp")
 _manager = CastManager()
+_media_server = MediaServer(tts.default_cache_dir())
+
+# Targets that mean "every speaker", in English and Vietnamese.
+_ALL_KEYWORDS = {"all", "tất cả", "tat ca", "everyone", "*"}
 
 
 @mcp.tool()
@@ -34,6 +40,103 @@ async def discover_devices(timeout: float = 5.0) -> list[dict[str, Any]]:
 async def list_devices() -> list[dict[str, Any]]:
     """List devices already discovered this session without re-scanning."""
     return await asyncio.to_thread(_manager.list_cached)
+
+
+@mcp.tool()
+async def list_speakers() -> list[dict[str, Any]]:
+    """List known Google speakers and speaker groups (excludes video Chromecasts).
+
+    Reads the saved device list, so it works without re-scanning. Scans once
+    automatically if nothing has been discovered yet.
+    """
+    speakers = await asyncio.to_thread(_manager.list_speakers)
+    if not speakers:
+        await asyncio.to_thread(_manager.discover, 5.0)
+        speakers = await asyncio.to_thread(_manager.list_speakers)
+    return speakers
+
+
+async def _select_targets(target: str | None) -> tuple[list[str], dict[str, Any] | None]:
+    """Turn a ``target`` argument into concrete speaker names.
+
+    Returns ``(names, prompt)``. When ``target`` is missing, ``names`` is empty
+    and ``prompt`` holds the speaker list for the caller to ask the user about.
+    """
+    speakers = await list_speakers()
+    names = [s["friendly_name"] for s in speakers]
+
+    if target and target.strip():
+        cleaned = target.strip()
+        if cleaned.lower() in _ALL_KEYWORDS:
+            return names, None
+        # Accept a comma-separated list of devices.
+        return [part.strip() for part in cleaned.split(",") if part.strip()], None
+
+    if not names:
+        return [], {
+            "status": "no_speakers_found",
+            "speakers": [],
+            "message": "No Google speaker found on the network. Run discover_devices.",
+        }
+
+    return [], {
+        "status": "needs_speaker_selection",
+        "speakers": speakers,
+        "message": (
+            "No target given. Ask the user which speaker to play on, then call "
+            "this tool again with target=<friendly_name>, a comma-separated "
+            "list of names, or 'all' to play on every speaker. "
+            f"Available: {', '.join(names)}."
+        ),
+    }
+
+
+@mcp.tool()
+async def say(
+    text: str,
+    target: str | None = None,
+    voice: str = "female",
+    rate: str = "+0%",
+) -> dict[str, Any]:
+    """Speak text out loud on Google speakers (Vietnamese supported).
+
+    Converts the text to speech, serves the audio from this machine, and casts
+    it to the chosen speakers. If ``target`` is omitted, no audio is played:
+    the tool returns the list of speakers so you can ask the user which one to
+    use (or "all").
+
+    Args:
+        text: What to say, e.g. Vietnamese text like "Cơm đã chín rồi".
+        target: Speaker friendly_name or uuid, several separated by commas, or
+            "all" for every speaker. Omit to be asked which speaker to use.
+        voice: "female" (default), "male", or a full edge-tts voice id.
+        rate: Speaking speed adjustment, e.g. "-20%" for slower, "+10%" faster.
+    """
+    targets, prompt = await _select_targets(target)
+    if prompt is not None:
+        return prompt
+
+    audio_path = await tts.synthesize(text, voice=voice, rate=rate)
+    url = await asyncio.to_thread(_media_server.url_for, audio_path)
+
+    async def cast_to(name: str) -> dict[str, Any]:
+        try:
+            await asyncio.to_thread(
+                _manager.play_media, name, url, "audio/mpeg", text[:60]
+            )
+            return {"speaker": name, "status": "playing"}
+        except Exception as exc:  # one unreachable speaker must not fail the rest
+            return {"speaker": name, "status": "error", "error": str(exc)}
+
+    results = await asyncio.gather(*(cast_to(name) for name in targets))
+    played = [r for r in results if r["status"] == "playing"]
+    return {
+        "status": "ok" if played else "failed",
+        "text": text,
+        "voice": tts.resolve_voice(voice),
+        "audio_url": url,
+        "results": list(results),
+    }
 
 
 @mcp.tool()

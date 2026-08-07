@@ -14,6 +14,8 @@ from typing import Any
 
 import pychromecast
 
+from .speaker_store import SpeakerStore, is_speaker
+
 
 def _guess_content_type(url: str) -> str:
     """Best-effort MIME type from a media URL's extension."""
@@ -49,19 +51,21 @@ class DeviceNotFoundError(Exception):
 class CastManager:
     """Discovers and controls Google Cast devices, caching live connections."""
 
-    def __init__(self) -> None:
+    def __init__(self, store: SpeakerStore | None = None) -> None:
         self._lock = threading.RLock()
         # uuid (str) -> Chromecast
         self._devices: dict[str, Any] = {}
         self._browser: Any = None
+        self._store = store or SpeakerStore()
 
     # -- discovery ---------------------------------------------------------
 
     def discover(self, timeout: float = 5.0) -> list[dict[str, Any]]:
         """Scan the local network and refresh the cached device list.
 
-        Returns a list of device info dicts. Devices already connected keep
-        their existing connection; new ones are added to the cache.
+        Results are also written to the on-disk store so a later process knows
+        about them without scanning. Devices already connected keep their
+        existing connection; new ones are added to the cache.
         """
         casts, browser = pychromecast.get_chromecasts(timeout=timeout)
         with self._lock:
@@ -72,17 +76,46 @@ class CastManager:
                 uuid = str(cast.cast_info.uuid)
                 # Keep an already-connected instance if we have one.
                 self._devices.setdefault(uuid, cast)
-            return [self._info(cast) for cast in self._devices.values()]
+            found = [self._info(cast) for cast in self._devices.values()]
+        self._store.save(found)
+        return found
 
     def list_cached(self) -> list[dict[str, Any]]:
-        """Return info for devices discovered so far without re-scanning."""
+        """Return known devices: live ones this session, plus the saved list."""
         with self._lock:
-            return [self._info(cast) for cast in self._devices.values()]
+            live = {str(c.cast_info.uuid): self._info(c) for c in self._devices.values()}
+        merged = {d["uuid"]: d for d in self._store.load() if d.get("uuid")}
+        merged.update(live)
+        return list(merged.values())
+
+    def list_speakers(self) -> list[dict[str, Any]]:
+        """Known devices that are speakers or speaker groups (not video casts)."""
+        return [d for d in self.list_cached() if is_speaker(d)]
 
     # -- resolution --------------------------------------------------------
 
     def _resolve(self, target: str) -> Any:
-        """Find a cached device by UUID or (case-insensitive) friendly name."""
+        """Find a live device by UUID or (case-insensitive) friendly name.
+
+        Falls back to a fresh scan once, so callers working from the saved
+        device list do not have to discover explicitly.
+        """
+        found = self._resolve_locally(target)
+        if found is not None:
+            return found
+
+        self.discover()
+        found = self._resolve_locally(target)
+        if found is not None:
+            return found
+
+        known = ", ".join(sorted(d["friendly_name"] for d in self.list_cached())) or "none"
+        raise DeviceNotFoundError(
+            f"Device {target!r} not found on the network. Known devices: {known}."
+        )
+
+    def _resolve_locally(self, target: str) -> Any | None:
+        """Match ``target`` against the live device cache, or None."""
         with self._lock:
             if target in self._devices:
                 return self._devices[target]
@@ -92,10 +125,7 @@ class CastManager:
                     return cast
                 if cast.cast_info.friendly_name.lower() == lowered:
                     return cast
-        raise DeviceNotFoundError(
-            f"Device {target!r} not found. Run discover_devices first, "
-            "then use its friendly name or uuid."
-        )
+        return None
 
     def _connected(self, target: str) -> Any:
         """Resolve a device and ensure its connection is established."""
