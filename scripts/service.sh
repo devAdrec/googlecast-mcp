@@ -74,7 +74,10 @@ WantedBy=multi-user.target
 EOF
 
     sudo systemctl daemon-reload
-    sudo systemctl enable --now "$SERVICE_NAME"
+    sudo systemctl enable "$SERVICE_NAME"
+    # restart, not `enable --now`: that leaves an already-running service on
+    # its old command line, so a reinstall would silently change nothing.
+    sudo systemctl restart "$SERVICE_NAME"
     sleep 2
     sudo systemctl --no-pager --lines=0 status "$SERVICE_NAME" || true
 
@@ -101,7 +104,17 @@ cmd_remove() {
     echo "Removed. The device list in ~/.googlecast-mcp was left in place."
 }
 
-cmd_status() { systemctl --no-pager --lines=0 status "$SERVICE_NAME"; }
+cmd_status() {
+    systemctl --no-pager --lines=0 status "$SERVICE_NAME"
+    # The unit file can differ from what the running process was started with.
+    local pid
+    pid="$(systemctl show "$SERVICE_NAME" -p MainPID --value)"
+    if [ "${pid:-0}" != "0" ] && [ -r "/proc/$pid/cmdline" ]; then
+        echo
+        echo "Running command line:"
+        tr '\0' ' ' < "/proc/$pid/cmdline"; echo
+    fi
+}
 
 case "${1:-}" in
     install) cmd_install ;;
