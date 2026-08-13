@@ -248,6 +248,14 @@ design decisions behind each module, and the deployment notes.
   hosts to the LAN, and handles clean shutdown.
 - `scripts/service.sh` — systemd install/remove/start/stop/restart/status/logs.
 
+## How this was built
+
+[`_dong-goi/method-note.md`](_dong-goi/method-note.md) records the reasoning
+behind the design and the dead ends hit along the way — most of it applies to
+any MCP server that has to serve several kinds of client, not just this one.
+[`_dong-goi/reproduction-prompt.md`](_dong-goi/reproduction-prompt.md) is
+enough to rebuild an equivalent server from scratch.
+
 ## License
 
 MIT
