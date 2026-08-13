@@ -57,6 +57,35 @@ The service must run on a machine on the **same LAN as the speakers**:
 discovery uses mDNS, and the speakers fetch the audio back from it. Allow both
 ports through the firewall if one is active.
 
+### The deployed command
+
+The install currently in use, serving Claude Desktop over https and a
+browser-based client at `http://192.168.1.99:8383`:
+
+```bash
+MCP_EXTRA_ARGS="--allow-host google-cast.adrec.cloud --json-response --stateless --cors-origin http://192.168.1.99:8383" \
+  ./scripts/service.sh install
+```
+
+Each flag earns its place — drop one and a client breaks:
+
+| Flag | Without it |
+|---|---|
+| `--allow-host <domain>` | Requests through the reverse proxy get `421 Misdirected Request`. |
+| `--json-response` | Replies are SSE-framed; clients that parse only JSON fail. |
+| `--stateless` | Clients that drop `Mcp-Session-Id` fail after the first call. |
+| `--cors-origin <origin>` | A browser client's preflight fails: "Failed to fetch". |
+
+`--cors-origin` must match the browser's address bar exactly — scheme, host and
+port, no path. Repeat the flag for more origins. A page served on port 80 or
+443 sends no port in its origin (`http://192.168.1.99`, not `…:80`).
+
+Always confirm the change took effect:
+
+```bash
+./scripts/service.sh status     # check the "Running command line" line
+```
+
 ## Client configuration (remote, over HTTP)
 
 Point the client at the service's LAN address:
