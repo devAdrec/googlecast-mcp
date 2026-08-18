@@ -74,7 +74,10 @@ async def _select_targets(target: str | None) -> tuple[list[str], dict[str, Any]
     if target and target.strip():
         cleaned = target.strip()
         if cleaned.lower() in _ALL_KEYWORDS:
-            return names, None
+            # Skip speaker groups: a group plays through its members, so
+            # including both sends two streams to the same physical speaker.
+            # Groups stay reachable by name for anyone who wants one.
+            return [s["friendly_name"] for s in speakers if s["cast_type"] != "group"], None
         # Accept a comma-separated list of devices.
         return [part.strip() for part in cleaned.split(",") if part.strip()], None
 

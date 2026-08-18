@@ -220,7 +220,7 @@ Toàn bộ kiểm chứng là **thủ công, không có unit test nào**.
 | Preflight OPTIONS khi chưa bật CORS | 405, không header CORS |
 | Bỏ `target` khi gọi `say` | trả `needs_speaker_selection` + danh sách loa, KHÔNG phát gì |
 | Cài lại service khi service đang chạy | tiến trình KHÔNG đổi — xem Bước 7 |
-| `target="all"` khi có cả nhóm loa lẫn thành viên của nhóm | **LỖI CHƯA SỬA.** `list_speakers()` trả cả `audio` lẫn `group`, nên `all` cast tới nhóm VÀ tới từng thành viên → một loa vật lý nhận hai luồng. Đo được: `Family speaker group` và `Kitchen speaker` cùng ở `192.168.1.22` (nhóm lấy một thành viên làm điều phối). Tool báo `playing` cho cả hai, nên **trạng thái trả về không phát hiện được lỗi này** — chỉ nghe mới biết |
+| `target="all"` khi có cả nhóm loa lẫn thành viên của nhóm | **Lỗi đã tìm ra và đã sửa.** `list_speakers()` trả cả `audio` lẫn `group`, nên `all` cast tới nhóm VÀ tới từng thành viên → một loa vật lý nhận hai luồng. Đo được: `Family speaker group` và `Kitchen speaker` cùng ở `192.168.1.22` (nhóm lấy một thành viên làm điều phối). Đáng sợ ở chỗ tool báo `playing` cho cả hai — **trạng thái trả về không phát hiện được lỗi, chỉ nghe mới biết**. Sửa: `all` bỏ `cast_type=group`; nhóm vẫn gọi được bằng tên. Chạy lại thật: 3 loa riêng lẻ, không chồng |
 
 ### CHƯA THỬ — đừng suy đoán là chạy được
 
@@ -237,7 +237,7 @@ Toàn bộ kiểm chứng là **thủ công, không có unit test nào**.
 
 - **Không có xác thực ở tầng ứng dụng.** `google-cast.adrec.cloud` phân giải công khai ra internet → ai biết URL cũng phát được tiếng trong nhà.
 - **Mặt phơi nhiễm thứ hai:** cổng audio 8766 bind `0.0.0.0`, không xác thực, phục vụ nguyên một thư mục file. Chặn IP ở nginx **chỉ che cổng 8765**, không chạm tới 8766.
-- **`target="all"` chồng luồng lên nhóm loa** (chi tiết ở bảng biên). Chưa sửa. Đây là bài học chung: khi nền tảng có khái niệm "nhóm thiết bị", danh sách "tất cả" phải khử trùng lặp giữa nhóm và thành viên, nếu không một thiết bị vật lý nhận hai lệnh.
+- Bài học rút từ lỗi `all` đã sửa (bảng biên): khi nền tảng có khái niệm **"nhóm thiết bị"**, danh sách "tất cả" phải khử trùng lặp giữa nhóm và thành viên — nếu không, một thiết bị vật lý nhận hai lệnh. Và trạng thái do API trả về sẽ **không** báo lỗi này.
 - Cache TTS tăng vô hạn, chưa có cơ chế dọn.
 - Chưa khôi phục âm lượng / media đang phát sau khi thông báo.
 

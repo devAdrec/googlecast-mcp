@@ -194,7 +194,9 @@ as returned by `discover_devices`.
 ### Speaking text (`say`)
 
 - `target` accepts one speaker, several separated by commas, or `"all"` /
-  `"tất cả"` for every speaker.
+  `"tất cả"` for every speaker. `"all"` covers the individual speakers only —
+  a speaker group plays through its members, so including it as well would send
+  two streams to the same device. Name a group directly to use one.
 - **Omitting `target` never plays anything.** The tool returns the speaker list
   and asks the client to have the user pick one.
 - `voice` is `"female"` (`vi-VN-HoaiMyNeural`, default), `"male"`
