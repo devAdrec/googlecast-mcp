@@ -1,75 +1,37 @@
 # Reproduction prompt — googlecast-mcp
 
-Dán khối dưới cho một AI coding agent để dựng lại product tương đương từ số không.
-Đọc kèm `method-note.md` để hiểu vì sao từng ràng buộc tồn tại.
+Dán nguyên khối dưới đây cho một AI coding agent trong một thư mục trống để dựng lại product tương đương.
+Đọc `method-note.md` cạnh file này để hiểu vì sao từng ràng buộc tồn tại.
 
-## Đề bài gốc (nguyên văn của người dùng, prompt sinh ra cả product)
-
-> hãy kiểm tra xem mcp này đúng yêu cầu không:
-> 1. dò danh sách các google speaker trong mạng nội bộ sau đó lưu lại
-> 2. gửi tin nhắn là text  tham số truyền vào mcp sau đó chuyển thanh âm thanh hỗ trợ tiếng việt sau đó phát lên speaker theo yêu cầu
-> 3. nếu user không chọn speaker sẽ hỏi user xem phát ở speaker nào, hoặc tất cả
-
-Ba dòng đó là đề bài. Toàn bộ phần dưới là **ràng buộc rút ra sau khi làm thật** — nếu bạn muốn trải nghiệm
-lại quá trình khám phá, hãy bắt đầu chỉ với 3 dòng trên; nếu bạn muốn đi thẳng tới kết quả, dùng cả khối dưới.
+**Nếu bạn làm một product KHÁC MIỀN** (đèn thông minh, camera, máy in… trong LAN), thay các phần đánh dấu 🔁 và giữ nguyên các phần đánh dấu 🔒:
+- 🔁 **thay được:** loại thiết bị, giao thức, cổng, thư viện, cách sinh nội dung (TTS), phần "ràng buộc bắt buộc" đặc thù Cast.
+- 🔒 **bất biến, đừng bỏ:** bảng yêu cầu đánh số làm bảng chấm; quy tắc thiếu tham số thì hỏi lại chứ không đoán; lưu bền + kết nối thẳng địa chỉ đã lưu; toàn bộ mục "phơi ra ngoài máy"; service phải restart tường minh; kiểm chứng bằng thiết bị thật kèm ghi lại lần đo. Thêm một bước 0 về khoá/bí mật nếu thiết bị của bạn cần.
 
 ---
 
-Xây một MCP server bằng Python 3.12 + uv, dùng official MCP SDK (FastMCP) + pychromecast, làm 3 việc:
+Xây một MCP server bằng Python (MCP SDK / FastMCP) để một LLM có thể nói tiếng Việt ra loa Google Cast trong mạng nội bộ.
 
-1. Dò thiết bị Google Cast trong LAN qua mDNS; lọc riêng loa (`cast_type` là `audio` hoặc `group`)
-   khỏi TV/màn hình (`cast`); lưu bền ra `~/.googlecast-mcp/speakers.json`, merge theo `uuid`.
-2. Tool `say(text, target?, voice, rate)`: text tiếng Việt → TTS bằng **edge-tts**
-   (`vi-VN-HoaiMyNeural` nữ / `NamMinhNeural` nam) → phát ra loa.
-3. Nếu `target` trống → KHÔNG phát gì; trả về danh sách loa + thông điệp để LLM hỏi lại người dùng.
-   Chấp nhận một tên, nhiều tên cách dấu phẩy, hoặc `all` / `tất cả` (fan-out bằng `asyncio.gather`).
+**🔒 Yêu cầu hành vi (đây là bảng chấm, đối chiếu từng mục khi xong):**
+1. Dò danh sách loa Google trong LAN qua mDNS rồi lưu lại bền vững.
+2. Nhận một tham số `text` tiếng Việt → chuyển thành âm thanh → phát lên loa được chỉ định.
+3. Nếu người dùng không chọn loa: KHÔNG phát gì cả, trả về danh sách loa kèm thông điệp để LLM hỏi lại. Chấp nhận một tên, nhiều tên cách phẩy, hoặc "all" / "tất cả".
 
-Tổng 13 tool: say, discover_devices, list_speakers, list_devices, get_status, play_media, play, pause,
-stop, seek, set_volume, set_muted, quit_app.
+**🔁 Ràng buộc riêng của miền Google Cast (đã trả giá để biết — thay khi đổi miền):**
+- TTS dùng `edge-tts`, giọng mặc định `vi-VN-HoaiMyNeural`. (Nếu bạn muốn đề xuất khác, hãy tạo mẫu âm thanh cho tôi nghe rồi tôi chọn — đừng tự quyết chất lượng giọng.)
+- Thiết bị Cast tự đi tải media qua HTTP và không đọc được đường dẫn local ⇒ server phải kèm một HTTP file server. Bind `0.0.0.0`, nhưng URL quảng bá cho thiết bị dựng từ IP LAN — hai thứ khác nhau.
+- Lọc loa khỏi thiết bị có màn hình bằng `cast_type` (`audio`/`group` là loa; `cast` là TV/màn hình).
+- Lưu bền host/port/uuid từng thiết bị; khi cast, thử **kết nối thẳng bằng địa chỉ đã lưu trước**, mDNS sót là chuyện thường. Đừng báo "not found" cho một thiết bị đang có trong danh sách đã biết.
+- Pin `mcp[cli]>=1.13,<2`. Gói `mcp` 2.0.0 trên PyPI KHÔNG liên quan, layout khác, kéo theo `httpx2` (typosquat) và `mcp-types`.
 
-Ràng buộc bắt buộc:
+**🔒 Phơi ra ngoài máy (transport Streamable HTTP) — làm đúng ngay từ đầu:**
+- SDK chỉ tin `127.0.0.1`; bind `0.0.0.0` không đủ, client máy khác sẽ nhận `421 Misdirected Request`. Nới allowlist host/origin: thêm IP LAN, thêm cờ `--allow-host <domain>`, sinh cả scheme `http` lẫn `https`, và cả biến thể **không kèm `:port`**. GIỮ cơ chế chống DNS-rebinding, chỉ nới — không tắt.
+- Thêm CORSMiddleware cho client chạy trong trình duyệt, **bắt buộc** `expose_headers=["Mcp-Session-Id"]`.
+- Thêm cờ `--json-response` và `--stateless` cho client khắt khe.
+- Nếu đặt sau nginx: `proxy_buffering off` + `proxy_read_timeout 3600s`, nếu không client sẽ treo im không báo lỗi.
+- Tên miền cho cert TLS **không được có gạch dưới** (`google_cast.…` sẽ không bao giờ xin được cert).
 
-- **Thiết bị Cast tự đi tải media qua HTTP**, không đọc được đường dẫn local ⇒ server phải kèm một
-  `ThreadingHTTPServer` phục vụ thư mục cache TTS trên **IP LAN** (cổng riêng, ví dụ 8766).
-- Cache file TTS theo `sha256(voice|rate|volume|text)`.
-- Wrapper pychromecast phải thread-safe, có cache kết nối, và có `_connect_saved()`: nối thẳng bằng
-  host/port đã lưu qua `pychromecast.get_chromecast_from_host()` **trước khi** quét mDNS lại
-  (mDNS lossy, hay sót thiết bị đã biết).
-- `pyproject.toml` pin `mcp[cli]>=1.13,<2` — gói `mcp` 2.0.0 trên PyPI là gói khác, kéo theo `httpx2`.
-- CLI hỗ trợ transport stdio / streamable-http / sse, kèm cờ `--allow-host`, `--cors-origin`,
-  `--json-response`, `--stateless`.
-- Bảo mật transport: **giữ nguyên** bảo vệ DNS-rebinding của SDK, chỉ nới `allowed_hosts`/`allowed_origins`.
-  Phải thêm cả biến thể có scheme `https` và biến thể host **không kèm `:port`** (proxy ở 443 không gửi port).
-- CORS: bọc `mcp.streamable_http_app()` bằng Starlette `CORSMiddleware`, **bắt buộc**
-  `expose_headers=["Mcp-Session-Id"]`.
-- Kèm `scripts/service.sh` (systemd install/remove/start/stop/**restart**/status/logs). `status` phải in
-  `/proc/<MainPID>/cmdline`; `install` phải `restart` chứ không chỉ `enable --now`.
-- Kèm vhost nginx mẫu với `proxy_buffering off` và `proxy_read_timeout 3600s`.
-- Domain phải dùng **gạch ngang**, không gạch dưới (CA không cấp cert cho hostname có `_`).
+**🔒 Chạy như service:** viết script install / remove / start / stop / restart / status / logs cho systemd. Lệnh cài **phải restart tường minh** — `enable --now` không khởi động lại tiến trình đang chạy, và bạn sẽ mất nhiều ngày gỡ nhầm bài toán. Lệnh `status` in luôn `/proc/<MainPID>/cmdline` để thấy tiến trình thật đang chạy tham số nào.
 
-Layout module (`src/googlecast_mcp/`), mỗi file một trách nhiệm:
+**🔒 Kiểm chứng:** phát thật ra loa thật và hỏi tôi có nghe được không. Khi một thiết bị không phản hồi, kiểm `nc -z <ip> 8009` trước khi nghi code. Ghi lại mọi lần đo kèm thời điểm.
 
-- `cast_manager.py` — wrapper pychromecast thread-safe: discovery, cache kết nối, controls, `_connect_saved()`.
-- `speaker_store.py` — lưu/nạp JSON, merge theo `uuid`, hàm `is_speaker()`.
-- `tts.py` — edge-tts → mp3, cache theo hash.
-- `media_server.py` — HTTP server phục vụ thư mục cache, hàm `lan_ip()`.
-- `server.py` — 13 `@mcp.tool()`, `_select_targets()`, fan-out.
-- `__main__.py` — CLI: transport, cấu hình bảo mật transport, CORS, cleanup.
-
-Tài liệu: `README.md` (cài đặt, cấu hình client cho cả stdio/HTTP/reverse-proxy, bảng troubleshooting,
-lệnh triển khai thật kèm giải thích từng cờ) và `docs/architecture.md` (luồng request, module, threading,
-cache, ports, "things that bite", security model).
-
-Ghi rõ trong tài liệu: server **không có xác thực tầng ứng dụng**, và cổng audio bind mọi interface, không
-xác thực, phục vụ nguyên một thư mục; nếu domain public thì phải chặn ở nginx (`allow 192.168.0.0/16; deny all;`).
-
-## Definition of done
-
-Coi là xong khi **cả 5 mục sau đã chạy thật trên phần cứng thật**, không phải chạy qua test giả:
-
-1. Phát được câu tiếng Việt nghe rõ trên loa thật, **trọn thời lượng**, kết thúc với `idle_reason=FINISHED`.
-2. Dò được thiết bị trong LAN và **lọc đúng** loa khỏi thiết bị có màn hình; danh sách sống sót qua restart.
-3. Một MCP client thật kết nối qua HTTP và gọi được **đủ 13 tool**.
-4. Một client chạy trong trình duyệt: preflight `OPTIONS` trả **200**, `tools/list` trả về đủ tool
-   (nếu preflight 405 hoặc thiếu `expose_headers` thì chưa xong).
-5. Gọi `say` **không có `target`** → KHÔNG phát gì, trả về danh sách loa để LLM hỏi lại.
+**Tài liệu khi xong:** README (cách cài, bảng tool, troubleshooting, lệnh triển khai thật kèm giải thích từng cờ) và một tài liệu kiến trúc (luồng request, bảng module, mô hình luồng, các bẫy đã gặp).
