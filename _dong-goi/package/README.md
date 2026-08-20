@@ -1,140 +1,222 @@
-# googlecast-mcp — cài từ số 0
+# Cài đặt googlecast-mcp từ số 0
 
-Tài liệu này chỉ trả lời một câu: **làm sao đưa product này chạy được trên một máy mới.**
-Cách dùng hằng ngày, danh sách tool, bảng troubleshooting nằm ở `README.md` gốc của repo —
-đó là tài liệu ĐANG SỐNG, luôn đúng hơn bản chép lại.
+Đây là **hướng dẫn cài**, viết cho người chưa từng thấy dự án này, trên một máy
+sạch. Mỗi lệnh dưới đây đã được chạy thật trên máy triển khai trước khi viết ra.
 
-| Bạn cần gì | Đọc ở đâu |
+Chi tiết vận hành, danh sách tool đầy đủ, bảng troubleshooting: xem `README.md`
+ở gốc repo. Kiến trúc: `docs/architecture.md`. Bốn file trong thư mục
+`_dong-goi/package/` này cố tình MỎNG và chỉ trỏ sang hai nguồn đó, để sáu tháng
+nữa không có hai bản tài liệu mâu thuẫn nhau.
+
+## 0. Điều kiện tiên quyết — không có thì dừng lại ở đây
+
+| Điều kiện | Vì sao bắt buộc |
 |---|---|
-| Cài đặt từ đầu | file này |
-| Dùng `say`, các dạng `target`, lỗi thường gặp | `_dong-goi/package/user-manual.md` → `README.md` |
-| Kiến trúc, luồng request | `docs/architecture.md` |
-| Ràng buộc triển khai (cổng, allowlist, CORS, DNS) | `_dong-goi/package/technical-docs.md` |
-| Vì sao product tồn tại, tiêu chí chấp nhận | `_dong-goi/package/requirement.md` |
-| Kiểm chứng bản cài | `_dong-goi/package/eval/` |
+| Máy cài phải **cùng LAN (cùng lớp mạng broadcast) với loa** | Dò thiết bị dùng mDNS, và loa tự quay lại tải file audio từ máy này. Qua VPN / khác VLAN là hỏng. |
+| **Có internet** | Giọng đọc dùng edge-tts (dịch vụ online của Microsoft). Không có mạng ra ngoài thì không tổng hợp được tiếng nói. |
+| **Linux/macOS + Python ≥ 3.11** | Đã kiểm trên Ubuntu, Python 3.12.3. |
+| Ít nhất một loa Google Cast đã bật | Home Mini, Nest Hub, hoặc nhóm loa. |
 
-## 0. Máy này có đủ điều kiện không?
+Không cần API key, không cần tài khoản Google, không cần tài khoản Microsoft.
 
-Bốn điều kiện, thiếu một là product KHÔNG chạy đúng — và ba trong bốn không hiện ra
-thành lỗi rõ ràng, nó chỉ im lặng không phát tiếng:
+## 1. Cài `uv` (máy sạch chưa chắc có)
 
-1. **Linux + systemd**, Python **3.12**, có `uv` trong PATH.
-2. **Cùng LAN, cùng broadcast domain với loa.** Discovery dùng mDNS: mDNS không đi
-   qua router giữa hai subnet. Máy ở VLAN khác sẽ không thấy loa nào.
-3. **Loa phải gọi ngược về được máy này qua HTTP.** Thiết bị Cast tự đi tải file
-   audio; nếu firewall chặn chiều loa → máy, mọi thứ báo `playing` mà không ra tiếng.
-4. **Ra được internet** — edge-tts tổng hợp giọng nói trên máy chủ Microsoft, không
-   phải offline.
-
-## 1. Lấy mã nguồn và dựng môi trường
+`uv` là trình quản lý môi trường Python mà dự án dùng. Kiểm tra trước:
 
 ```bash
-git clone <repo> googlecast_mcp && cd googlecast_mcp
-uv sync
+uv --version        # đã có thì bỏ qua bước này
 ```
 
-`uv sync` khoá `mcp[cli]>=1.13,<2` theo `pyproject.toml`. **Đừng nới trần `<2`.**
-Trên PyPI có gói tên `mcp` phiên bản 2.0.0 KHÔNG liên quan gì tới MCP SDK: layout
-khác hẳn và nó kéo theo `httpx2` (typosquat) cùng `mcp-types`. Dấu hiệu nhận biết
-bản đúng: nó phụ thuộc `httpx`, không phải `httpx2`.
-
-## 2. Chạy thử ở chế độ đơn giản nhất
+Chưa có thì cài:
 
 ```bash
-uv run --directory "$PWD" googlecast-mcp --transport http --host 0.0.0.0 --port 8765
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"     # mở terminal mới cũng được
+uv --version
 ```
 
-Rồi từ chính máy đó:
+## 2. Lấy mã nguồn
+
+Repo này **chưa được đẩy lên remote nào** (đã kiểm: `git remote -v` không trả về
+gì). Nên "lấy mã nguồn" nghĩa là một trong hai:
 
 ```bash
-uv run --directory "$PWD" python _dong-goi/package/eval/eval-googlecast-mcp.py
+# a) copy nguyên thư mục dự án từ máy đang có nó
+rsync -a nguoi_dung@may-cu:/storage/apps/mcp/googlecast_mcp/ ~/googlecast_mcp/
+
+# b) hoặc clone, nếu bạn đã tự đẩy nó lên một remote của mình
+git clone <url-remote-cua-ban> ~/googlecast_mcp
 ```
 
-Eval tầng offline không cần loa và **không phát tiếng**. Thoát mã 0 = bản cài lành lặn.
-Xem `eval/README.md` trước khi nghĩ tới cờ `--hardware` (cờ đó PHÁT TIẾNG THẬT).
+Từ đây, `~/googlecast_mcp` là **thư mục dự án**. Mọi lệnh dưới đây dùng đường dẫn
+tuyệt đối nên bạn đứng ở đâu cũng chạy được — thay `~/googlecast_mcp` bằng đường
+dẫn thật của bạn.
 
-## 3. Cài thành service systemd
+## 3. Cài phụ thuộc
 
 ```bash
-./scripts/service.sh install
-./scripts/service.sh status
-./scripts/service.sh logs
+uv sync --directory ~/googlecast_mcp
 ```
 
-Các lệnh khác: `remove`, `start`, `stop`, `restart`.
+Lệnh này tạo `.venv` và cài đúng phiên bản đã khoá trong `uv.lock`.
 
-Biến môi trường điều chỉnh: `MCP_HOST` (mặc định `0.0.0.0`), `MCP_PORT` (`8765`),
-`MEDIA_PORT` (`8766`), `MCP_USER`, `MCP_EXTRA_ARGS`.
+> Ghi chú quan trọng về phụ thuộc: `pyproject.toml` ghim `mcp[cli]>=1.13,<2` là
+> CỐ Ý. Trên PyPI có một gói tên `mcp` phiên bản 2.0.0 **không liên quan** tới
+> MCP SDK chính thức; nó có layout khác và kéo theo `httpx2`, `mcp-types`. Đừng
+> gỡ cái ghim đó.
 
-Lệnh đang chạy thật trên `192.168.1.128`:
+## 4. Chạy thử ngay — chưa cần service, chưa phát ra tiếng
+
+Kiểm tra chương trình khởi động được:
 
 ```bash
-MCP_EXTRA_ARGS="--allow-host google-cast.adrec.cloud --json-response --stateless --cors-origin http://192.168.1.99:8383" \
-  ./scripts/service.sh install
+uv run --directory ~/googlecast_mcp googlecast-mcp --help
 ```
 
-**Cạm bẫy đã cắn một lần, mất 3 ngày:** `systemctl enable --now` KHÔNG khởi động lại
-một service đang chạy. Sửa unit xong mà tiến trình cũ vẫn sống thì nó vẫn chạy mã và
-tham số CŨ, trong khi mọi thứ trông như đã cài xong. `service.sh install` nay gọi
-`restart` tường minh, và `service.sh status` in `/proc/<MainPID>/cmdline`
-(`scripts/service.sh:78-80,112-115`). **Luôn đọc dòng cmdline đó** để xác nhận tiến
-trình đang chạy đúng tham số bạn vừa đặt, thay vì tin vào `active (running)`.
-
-## 4. Reverse proxy https (chỉ khi client bắt buộc https)
-
-Claude Desktop custom connector chỉ nhận `https://`. Dùng
-`scripts/nginx-googlecast-mcp.conf` làm mẫu vhost, rồi cấp chứng chỉ Let's Encrypt.
-
-Hai điều kiện sống còn, cả hai đều từng làm hỏng việc:
-
-- **Tên miền KHÔNG được chứa dấu gạch dưới.** `google_cast.example.com` sẽ KHÔNG BAO
-  GIỜ xin được chứng chỉ — CA/B Forum cấm `_` trong hostname. Đây là ngõ cụt tuyệt
-  đối, không có cách vòng. Dùng gạch nối: `google-cast.example.com`.
-- **`proxy_buffering off;`** và `proxy_read_timeout 3600s;`
-  (`scripts/nginx-googlecast-mcp.conf:37,42`). Thiếu, client sẽ TREO im lặng, không
-  báo bất kỳ lỗi nào — nginx giữ luôn dòng sự kiện.
-
-Phải khai tên miền cho server bằng `--allow-host <domain>`, nếu không SDK trả
-**421 Misdirected Request**.
-
-Nếu client không đòi https, có đường vòng nhẹ hơn:
-`npx -y mcp-remote http://<ip>:8765/mcp --allow-http`.
-
-## 5. Kiểm tra cài đúng
-
-Theo thứ tự, dừng ở bước đầu tiên sai:
+Chạy bộ eval offline (không cần loa, không phát tiếng, chạy được mọi lúc):
 
 ```bash
-# 1. tiến trình chạy đúng tham số
-./scripts/service.sh status
-
-# 2. cổng đang nghe
-ss -ltnp | grep -E '8765|8766'
-
-# 3. endpoint sống (406 ở đây là ĐÚNG ĐẶC TẢ, không phải lỗi)
-curl -i http://127.0.0.1:8765/mcp
-
-# 4. eval offline
-uv run --directory "$PWD" python _dong-goi/package/eval/eval-googlecast-mcp.py
-
-# 5. loa có thật sự bắt được TCP không (làm TRƯỚC khi nghi ngờ mã nguồn)
-nc -z <ip-loa> 8009
+uv run --directory ~/googlecast_mcp python \
+    ~/googlecast_mcp/_dong-goi/package/eval/eval-googlecast-mcp.py
 ```
 
-Ý nghĩa mã trả về khi gọi thẳng bằng trình duyệt hoặc curl:
+Mong đợi: `43/43 passed`, exit code 0. Thêm `--online` để kiểm luôn phần tổng hợp
+giọng nói qua internet (vẫn không phát ra tiếng): `45/45 passed`.
 
-| Mã | Nghĩa | Xử lý |
-|---|---|---|
-| 406 | client không nhận `text/event-stream` | Bình thường. Trình duyệt mở tay luôn ra thế này. |
-| 421 | Host không nằm trong allowlist | thêm `--allow-host <domain>` |
-| 403 `Invalid Origin header` | origin trình duyệt không được phép | thêm `--cors-origin <origin>` |
-| 405 cho `OPTIONS` | chưa bật CORS | thêm `--cors-origin`; nếu không trình duyệt chỉ báo "Failed to fetch" |
+Kiểm tra transport HTTP trả lời đúng — chạy trên cổng rỗi 8799 để không đụng
+service thật:
 
-## 6. Trước khi coi là xong: hai lỗ hổng phải tự quyết
+```bash
+uv run --directory ~/googlecast_mcp googlecast-mcp \
+    --transport http --host 127.0.0.1 --port 8799 --json-response --stateless &
+sleep 4
+curl -s -X POST http://127.0.0.1:8799/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+kill %1
+```
 
-Product **không có xác thực ở tầng ứng dụng**. Nếu bạn trỏ một tên miền công khai vào
-nó, bất kỳ ai biết URL đều phát được tiếng trong nhà bạn.
+Mong đợi: JSON có `"serverInfo":{"name":"googlecast-mcp",...}`.
 
-Và chặn IP ở nginx **chỉ che cổng 8765**. Cổng audio **8766 vẫn bind `0.0.0.0`, không
-xác thực, phục vụ nguyên một thư mục file**. Muốn đóng thật thì phải chặn ở tường lửa
-máy chủ, không phải ở nginx. Chi tiết trong `technical-docs.md`.
+> Nếu bạn mở `http://127.0.0.1:8799/mcp` bằng trình duyệt và thấy **406 Not
+> Acceptable** — đó KHÔNG phải lỗi. Đặc tả yêu cầu client phải gửi header
+> `Accept` chấp nhận `text/event-stream`; trình duyệt không gửi.
+
+## 5. Dò loa và nói thử (bước này CÓ phát ra tiếng thật)
+
+Cách nhanh nhất là nối một MCP client vào (bước 6) rồi gọi `discover_devices`,
+`list_speakers`, rồi `say`. Nếu muốn thử bằng dòng lệnh, dùng tầng `--hardware`
+của bộ eval — **nó sẽ phát tiếng trong nhà**, nên hãy chắc là đúng lúc:
+
+```bash
+uv run --directory ~/googlecast_mcp python \
+    ~/googlecast_mcp/_dong-goi/package/eval/eval-googlecast-mcp.py \
+    --hardware --speaker "Tên loa của bạn"
+```
+
+Danh sách thiết bị được lưu bền ở `~/.googlecast-mcp/speakers.json`.
+
+## 6. Dùng tại chỗ qua stdio (client chạy cùng máy)
+
+Với Claude Desktop / Claude Code trên chính máy này:
+
+```json
+{
+  "mcpServers": {
+    "googlecast": {
+      "command": "uv",
+      "args": ["run", "--directory", "/home/ban/googlecast_mcp", "googlecast-mcp"]
+    }
+  }
+}
+```
+
+Đường dẫn phải TUYỆT ĐỐI. Nếu `uv` không nằm trong PATH mà client thấy, ghi
+đường dẫn đầy đủ tới `uv` (`command -v uv` để lấy).
+
+## 7. Chạy như service (client ở máy khác)
+
+Chỉ làm bước này khi bước 4 đã xanh. Máy chạy service phải cùng LAN với loa.
+
+```bash
+~/googlecast_mcp/scripts/service.sh install
+```
+
+Mặc định: MCP ở cổng **8765**, cổng phục vụ audio cho loa là **8766**. Đổi bằng
+biến môi trường (`MCP_PORT`, `MEDIA_PORT`, `MCP_USER`, `MCP_EXTRA_ARGS`).
+
+Các lệnh quản lý: `install`, `remove`, `start`, `stop`, `restart`, `status`,
+`logs`.
+
+> Đây là script cần `sudo` (ghi unit file vào `/etc/systemd/system`).
+> `service.sh status` cố ý in cả dòng lệnh THẬT của tiến trình đang chạy
+> (`/proc/<pid>/cmdline`), vì unit file trên đĩa có thể đã khác với tiến trình
+> đang sống.
+
+Nếu bật tường lửa, mở cả hai cổng cho LAN:
+
+```bash
+sudo ufw allow from 192.168.0.0/16 to any port 8765 proto tcp
+sudo ufw allow from 192.168.0.0/16 to any port 8766 proto tcp
+```
+
+Client ở máy khác trỏ vào `http://<ip-máy-này>:8765/mcp`.
+
+## 8. Đưa ra https qua nginx (tuỳ chọn)
+
+Chỉ cần khi client bắt buộc https (Claude Desktop custom connector là một ví dụ).
+
+```bash
+sudo cp ~/googlecast_mcp/scripts/nginx-googlecast-mcp.conf \
+        /etc/nginx/conf.d/googlecast-mcp.conf
+# sửa server_name và proxy_pass cho đúng domain / IP của bạn
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Rồi cài lại service với tên miền được cho phép:
+
+```bash
+MCP_EXTRA_ARGS="--allow-host ten-mien-cua-ban.example.com" \
+    ~/googlecast_mcp/scripts/service.sh install
+```
+
+Ba cái bẫy đã cắn thật, đã xử lý sẵn trong file conf — đừng bỏ:
+
+1. **Tên miền không được chứa dấu gạch dưới `_`.** CA không cấp chứng chỉ cho
+   nó, nên `google_cast.example.com` là ngõ cụt tuyệt đối với client bắt https.
+   Dùng gạch nối: `google-cast.example.com`.
+2. **`proxy_buffering off;`** — thiếu dòng này client treo im, không báo lỗi gì.
+3. Bỏ `--allow-host` thì server trả **421 Misdirected Request**: SDK chỉ tin
+   loopback cho tới khi được nới.
+
+## 9. Client chạy trong trình duyệt (llama-server webui…)
+
+Trình duyệt cần CORS, và cần đọc được header session:
+
+```bash
+MCP_EXTRA_ARGS="--allow-host ten-mien-cua-ban.example.com --json-response --stateless --cors-origin http://192.168.1.99:8383" \
+    ~/googlecast_mcp/scripts/service.sh install
+```
+
+`--cors-origin` phải khớp **chính xác** thanh địa chỉ của trang gọi. Trang chạy
+ở cổng 80/443 gửi origin KHÔNG kèm số cổng. Sai origin thì trình duyệt chặn và
+JS chỉ thấy `Failed to fetch (check CORS?)` — không có thông tin gì thêm.
+
+## 10. Gỡ
+
+```bash
+~/googlecast_mcp/scripts/service.sh remove
+```
+
+Danh sách thiết bị ở `~/.googlecast-mcp/` không bị xoá.
+
+## Cảnh báo bảo mật — đọc trước khi mở ra internet
+
+- **Không có xác thực ở tầng ứng dụng.** Ai biết URL cũng phát được tiếng trong
+  nhà bạn. Nếu tên miền phân giải công khai, hãy chặn theo IP ở nginx (hai dòng
+  `allow`/`deny` trong file conf mẫu, hiện đang comment) hoặc đặt thêm lớp xác
+  thực trước nó.
+- **Cổng audio 8766 là mặt phơi nhiễm thứ hai**: nó bind `0.0.0.0`, không xác
+  thực, và phục vụ nguyên thư mục cache TTS. Chặn IP ở nginx CHỈ che 8765,
+  KHÔNG chạm tới 8766. Phải xử lý riêng bằng tường lửa.

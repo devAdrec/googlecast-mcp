@@ -1,127 +1,119 @@
-# Ràng buộc triển khai
+# Ghi chú kỹ thuật — ràng buộc triển khai
 
-**Kiến trúc, luồng request, mô-đun, mô hình luồng (threading), phân giải thiết bị:
-đọc `docs/architecture.md`.** File này KHÔNG chép lại nội dung đó — nó chỉ ghi những
-ràng buộc chỉ lộ ra khi đem product ra khỏi máy phát triển: cổng, allowlist, CORS, DNS.
+**Kiến trúc, luồng xử lý, mô hình luồng, mô hình bảo mật: đọc
+`docs/architecture.md` ở gốc repo.** File này KHÔNG chép lại nội dung đó. Nó chỉ
+ghi những ràng buộc khi đem product ra chạy thật — thứ mà tài liệu kiến trúc
+không mô tả và người cài hay vấp.
 
-## Ràng buộc gốc, quyết định mọi thứ còn lại
+## Ràng buộc kiến trúc gốc, không né được
 
-**Thiết bị Cast tự đi tải media qua HTTP.** Bạn không đưa cho nó một đường dẫn file;
-bạn đưa cho nó một URL và nó tự kết nối ngược lại. Hệ quả không né được: một server
-"nói được" bắt buộc phải kiêm luôn HTTP file server. Đó là lý do có `media_server.py`,
-là lý do có cổng thứ hai, và là lý do phần lớn lỗi trong product này là lỗi mạng chứ
-không phải lỗi logic.
+Thiết bị Cast **tự đi tải media qua HTTP**; nó không đọc được đường dẫn file
+trên máy bạn. Hệ quả: một server "biết nói" bắt buộc phải kiêm luôn một HTTP
+file server. Đó là lý do có hai cổng, chứ không phải lựa chọn thiết kế tuỳ ý.
 
-Chính xác về chỗ hay bị viết nhầm: `media_server.py:76` bind **`0.0.0.0`** (mọi
-interface). URL quảng bá cho thiết bị thì dựng từ `lan_ip()`. **Hai thứ khác nhau** —
-địa chỉ lắng nghe không phải địa chỉ quảng bá. Bind rộng vì interface định tuyến ra
-ngoài chưa chắc là interface loa dùng để gọi về.
+Nói chính xác về chỗ này, vì rất dễ viết nhầm:
+
+- `media_server.py:76` bind `("0.0.0.0", port)` — **mọi interface**.
+- URL quảng bá cho thiết bị được dựng từ `lan_ip()` (`media_server.py:19-32`),
+  là địa chỉ LAN mà loa nhìn thấy.
+
+Hai thứ này KHÁC NHAU. Bind mọi interface vì interface định tuyến không nhất
+thiết là interface loa dùng để quay lại.
 
 ## Cổng
 
-| Cổng | Ai nghe | Ai gọi tới | Có xác thực? |
+| Cổng | Ai gọi | Bind | Xác thực |
 |---|---|---|---|
-| 8765 | endpoint MCP (`--port`) | MCP client (Claude Desktop, llama-server webui) | Không |
-| 8766 | HTTP audio (`--media-port`) | **loa Google**, gọi ngược về máy chủ | Không |
+| 8765 | MCP client (Claude Desktop, webui, …) | `0.0.0.0` | không |
+| 8766 | **Loa** quay lại tải file mp3 | `0.0.0.0` | không |
 
-Ghim cổng audio (mặc định là cổng ngẫu nhiên) để chỉ phải viết một luật tường lửa.
+8766 mặc định là cổng ngẫu nhiên; service ghim nó qua
+`GOOGLECAST_MCP_MEDIA_PORT` để chỉ phải viết một luật tường lửa. Cả hai cổng
+phải mở cho LAN, nếu không loa không tải được file và bạn sẽ thấy loa nháy đèn
+rồi tắt.
 
-**Điều dễ hiểu lầm nhất về bảo mật ở đây:** chặn IP trong nginx **chỉ che 8765**.
-Cổng 8766 không đi qua nginx. Nó bind `0.0.0.0`, không xác thực, và phục vụ nguyên
-một thư mục file. Muốn đóng thật thì đóng ở tường lửa máy chủ.
+## Allowlist — vì sao lại phức tạp đến vậy
 
-Trong `scripts/nginx-googlecast-mcp.conf:55-56` có sẵn hai dòng
-`allow 192.168.0.0/16; deny all;` — người dùng đã đồng ý bật nhưng **hiện vẫn đang
-comment**. Chưa bật.
+SDK có sẵn bảo vệ chống DNS-rebinding: mặc định chỉ tin `127.0.0.1`. Bind
+`0.0.0.0` **không** làm nó tin thêm ai; client từ xa nhận **421 Misdirected
+Request**. Quyết định: **giữ bảo vệ, chỉ nới allowlist** — tắt hẳn là mở cửa cho
+trang web bất kỳ tấn công server trong mạng nội bộ của bạn.
 
-## Allowlist: vì sao có 421 Misdirected Request
+`__main__.py:46-69` sinh allowlist. Hai chi tiết phải có, mỗi cái đều từ một sự
+cố thật:
 
-MCP SDK có bảo vệ chống DNS-rebinding và **chỉ tin `127.0.0.1`**. Bind `0.0.0.0`
-KHÔNG đủ — bind là chuyện nghe, allowlist là chuyện tin. Client ở máy khác sẽ ăn 421.
+1. **Có cả host trần, không kèm `:port`.** Proxy chạy ở cổng mặc định (443) gửi
+   header `Host` không có số cổng.
+2. **Có cả scheme `https`.** Proxy kết thúc TLS, nên origin client gửi lên là
+   `https://…` dù server nội bộ chỉ nói http.
 
-Lựa chọn ở đây là **nới allowlist, không tắt bảo vệ**. Tắt là mở cửa cho một trang web
-bất kỳ mà nạn nhân đang mở sai khiến server nội bộ của họ.
+Bỏ sót một trong hai là 421 hoặc 403 `Invalid Origin header`. Cả hai đều được
+eval offline canh (`allowlist: *`).
 
-`__main__.py:46-69` dựng allowlist gồm loopback, IP LAN, và mọi `--allow-host`. Hai
-chi tiết nhỏ mà thiếu là hỏng:
+Wildcard bind `0.0.0.0` cố ý KHÔNG được đưa vào danh sách host tin cậy — nó
+không phải một địa chỉ client kết nối tới.
 
-- Phải có host **KHÔNG kèm `:port`**. Trang ở cổng 443 gửi header Host không có port.
-- Phải có scheme **`https`**, vì reverse proxy đổi scheme.
+## CORS — chỉ cần khi client chạy trong trình duyệt
 
-Cả hai được eval khoá lại (mục `allowed_hosts` / `allowed_origins`), chính vì cả hai
-đều từng bị thiếu.
+SDK không sinh phản hồi CORS: request `OPTIONS` bị trả **405**, không header
+nào. Trình duyệt chặn, và JS chỉ thấy `Failed to fetch (check CORS?)` — một
+thông báo trống rỗng, không chỉ ra được gì.
 
-## CORS: vì sao trình duyệt chỉ báo "Failed to fetch"
+Cách xử lý (`__main__.py:22-40`): bọc `mcp.streamable_http_app()` bằng
+`CORSMiddleware`. **Bắt buộc** có `expose_headers=["Mcp-Session-Id"]` — trình
+duyệt không đọc được header không được expose, nên không duy trì được session,
+dù preflight đã qua.
 
-SDK không sinh phản hồi CORS. Với client chạy trong trình duyệt, preflight `OPTIONS`
-nhận **405** không kèm header nào; trình duyệt chặn, và JavaScript **chỉ thấy một lỗi
-trống rỗng** — không có mã, không có nội dung. Triệu chứng không hề trỏ về nguyên nhân.
+Origin phải khớp **chính xác** thanh địa chỉ. Trang ở cổng 80/443 gửi origin
+không kèm số cổng.
 
-`--cors-origin` bọc `streamable_http_app()` bằng `CORSMiddleware` (`__main__.py:37`).
+## Reverse proxy / DNS
 
-**`expose_headers=["Mcp-Session-Id"]` là BẮT BUỘC.** Trình duyệt không đọc được header
-không được expose, nên không giữ được session, nên không tiếp tục được — dù preflight
-đã qua. Đây là một lỗi thứ hai nằm ngay sau lỗi thứ nhất.
+File mẫu: `scripts/nginx-googlecast-mcp.conf`.
 
-Origin phải khớp **chính xác** thanh địa chỉ. Trang ở cổng 80/443 gửi origin không kèm
-port.
+- **`proxy_buffering off;` (dòng 37)** — thiếu thì client treo im lặng, không
+  báo bất cứ lỗi gì. Đây là kiểu hỏng tệ nhất: không có tín hiệu để lần theo.
+- **`proxy_read_timeout 3600s;` (dòng 42)** — kết nối MCP sống lâu.
+- **Hostname không được có dấu gạch dưới.** CA/B Forum cấm `_` trong tên miền
+  xin chứng chỉ, nên `google_cast.example.com` KHÔNG BAO GIỜ có https. Với client
+  bắt buộc https (Claude Desktop custom connector), đó là ngõ cụt tuyệt đối, và
+  không có thông báo lỗi nào nói cho bạn biết lý do. Dùng gạch nối.
+- Hai dòng chặn theo IP (`allow 192.168.0.0/16; deny all;`, dòng 55-56) hiện
+  **vẫn đang comment** — chưa bật.
 
-## DNS và chứng chỉ
+## Cờ dành cho client khắt khe
 
-**Hostname chứa dấu gạch dưới không bao giờ xin được chứng chỉ.** CA/B Forum cấm `_`.
-Gặp một client chỉ nhận https (Claude Desktop custom connector) thì đây là ngõ cụt
-tuyệt đối — không có cách vòng, chỉ có đổi tên miền. `google_cast.…` → `google-cast.…`.
+| Cờ | Khi nào cần |
+|---|---|
+| `--json-response` | Client không parse được khung SSE `event: message` |
+| `--stateless` | Client bỏ qua header `Mcp-Session-Id` |
+| `--cors-origin <origin>` | Client chạy trong trình duyệt |
+| `--allow-host <domain>` | Có reverse proxy đứng trước |
 
-## nginx
+Cấu hình đang chạy thật trên máy triển khai:
 
-`proxy_buffering off` + `proxy_read_timeout 3600s`
-(`scripts/nginx-googlecast-mcp.conf:37,42`). Thiếu, nginx giữ lại dòng sự kiện và
-client **treo im lặng, không báo lỗi gì cả**. Không có thông báo nào để tra cứu.
+```
+MCP_EXTRA_ARGS="--allow-host google-cast.adrec.cloud --json-response --stateless --cors-origin http://192.168.1.99:8383" ./scripts/service.sh install
+```
 
-## Client khắt khe
+## Bẫy vận hành
 
-`--json-response` trả JSON thay vì khung SSE `event: message`; `--stateless` bỏ yêu
-cầu client mang `Mcp-Session-Id` giữa các request. Dùng cho client không parse được
-SSE hoặc bỏ qua header session (ví dụ llama-server webui).
+- **`systemctl enable --now` KHÔNG restart service đang chạy.** Unit file đổi,
+  tiến trình vẫn chạy code và tham số CŨ. Sự cố thật: tiến trình cũ sống 3 ngày,
+  người dùng phải báo "vẫn lỗi" ba lần. `service.sh` dùng `restart` tường minh,
+  và `status` in `/proc/<MainPID>/cmdline` để bạn thấy tiến trình THẬT đang chạy
+  gì (`service.sh:78-80,112-115`).
+- **Thiết bị Cast có thể treo**: mDNS thấy, ping được, nhưng TCP 8009 từ chối →
+  `wait timed out after 10 s`. Restart thiết bị là hết. Chạy `nc -z <ip> 8009`
+  TRƯỚC khi nghi ngờ code.
+- **406 khi mở `/mcp` bằng trình duyệt là đúng đặc tả**, không phải lỗi.
+- **Đừng dùng `pkill -f "<mẫu>"`** để dọn tiến trình: mẫu khớp luôn dòng lệnh
+  bash đang chạy, và shell tự giết chính nó. Lấy PID từ `ss -ltnp`.
 
-## Mã trả về, đọc đúng thì đỡ mất thời gian
+## Mặt phơi nhiễm — nói thẳng
 
-| Mã | Nguyên nhân | Ghi chú |
-|---|---|---|
-| 406 | client không nhận `text/event-stream` | **Đúng đặc tả, không phải lỗi.** Mở `/mcp` bằng trình duyệt luôn ra thế này. |
-| 421 | Host ngoài allowlist | `--allow-host` |
-| 403 `Invalid Origin header` | origin ngoài allowlist | `--cors-origin` |
-| 405 cho `OPTIONS` | chưa bật CORS | `--cors-origin` |
-
-## Thiết bị treo: kiểm mạng trước khi nghi mã nguồn
-
-Có trường hợp mDNS thấy thiết bị, ping thông, nhưng **TCP 8009 bị từ chối** →
-`wait timed out after 10 s`. Khởi động lại thiết bị là hết. Luôn chạy
-`nc -z <ip> 8009` TRƯỚC khi đọc mã nguồn.
-
-**Một bài học suy luận đắt hơn bản thân lỗi:** đã có lúc kết luận "Nest Hub bỏ cổng
-8009 do firmware", chỉ vì cả HAI Nest Hub trong nhà cùng đóng cổng. Hai mẫu trùng nhau
-không đủ để suy ra nguyên nhân hệ thống. Kết luận đó sai, và nó suýt làm ngừng việc
-tìm nguyên nhân thật.
-
-## mDNS sót thiết bị đã lưu
-
-Khi quét sót một thiết bị đang có trong store, lỗi `DeviceNotFoundError` **tự mâu
-thuẫn**: nó liệt kê chính thiết bị đó trong danh sách "known". Thông báo lỗi tự mâu
-thuẫn là dấu hiệu hai nguồn sự thật đang lệch nhau, không phải dấu hiệu code sai chỗ
-ném lỗi. `_connect_saved()` (`cast_manager.py:110,124,134`) nối thẳng bằng host/port
-đã lưu.
-
-## Vận hành
-
-- `systemctl enable --now` **không** khởi động lại service đang chạy. Tiến trình cũ
-  giữ nguyên mã và tham số cũ. Ở đây một tiến trình cũ đã sống 3 ngày.
-  `service.sh status` in `/proc/<MainPID>/cmdline` — đọc dòng đó, đừng tin
-  `active (running)`.
-- `pkill -f "<pattern>"` khớp luôn chính dòng lệnh bash đang chạy nó → tự giết shell
-  (exit 144). Lấy PID từ `ss -ltnp`.
-
-## Chưa kiểm chứng
-
-- Service sống sót qua reboot (đã `enable`, **chưa reboot lần nào**).
-- Địa chỉ đã lưu bị cũ vì thiết bị đổi IP → nhánh quét lại: **chưa thử**.
+- Không có xác thực ở tầng ứng dụng. Tên miền phân giải công khai ra internet
+  nghĩa là ai biết URL cũng phát được tiếng trong nhà.
+- Chặn IP ở nginx chỉ che 8765. **8766 không được che** — nó vẫn bind
+  `0.0.0.0`, không xác thực, và phục vụ nguyên thư mục cache TTS. Phải xử lý
+  riêng bằng tường lửa.

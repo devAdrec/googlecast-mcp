@@ -1,105 +1,96 @@
-# Harness spec — 5 lớp
+# Harness spec — googlecast-mcp
 
-Loại harness: **vận hành** (máy móc, kết quả xác định). Không có bước nào để AI sinh
-nội dung tự do, nên trọng số dồn vào Tool và Execution; Eval nhẹ hơn so với harness
-sinh, nhưng **không nhẹ được như một CLI thường** vì lớp Feedback ở đây bị mù một
-phần: kết quả cuối cùng là âm thanh, mà chương trình không nghe được.
+Loại: **harness vận hành** (máy móc, kết quả xác định — cùng đầu vào cho cùng
+đầu ra, không phải AI sinh nội dung). Trọng số vì thế dồn về lớp Execution và
+Eval; lớp Context nhẹ.
 
-## 1. Context — thứ agent phải biết trước khi gọi
+## Lớp 1 — Context (nhẹ)
 
-| Cái gì | Nguồn | Vì sao cần |
+Server không có ngữ cảnh hội thoại. Trạng thái bền duy nhất:
+
+| Thứ | Ở đâu | Vòng đời |
 |---|---|---|
-| Có những loa nào | `list_speakers` (đọc store, tự quét nếu rỗng) | không có thì không thể hỏi người dùng câu đúng |
-| Loa vs thiết bị hình ảnh | `cast_type` trong store | tránh phát tiếng lên TV |
-| Loa lẻ vs nhóm | `cast_type == "group"` | quyết định `all` gồm những gì |
-| Thiếu `target` thì làm gì | thông điệp trong `needs_speaker_selection` | agent phải hỏi lại, không được đoán |
+| Danh sách thiết bị | `~/.googlecast-mcp/speakers.json` | bền, merge theo `uuid`, không bao giờ tự xoá |
+| Cache mp3 | `/tmp/googlecast-mcp-tts` (`GOOGLECAST_MCP_CACHE`) | bền tới khi `/tmp` bị dọn; **tăng vô hạn** |
+| Kết nối tới thiết bị | trong RAM tiến trình | mất khi restart |
 
-**Nguyên tắc thiết kế của lớp này:** khi thiếu thông tin, harness **trả dữ liệu để hỏi
-lại**, không tự suy diễn. Cụ thể là trả nguyên danh sách loa kèm một câu chỉ dẫn đủ rõ
-để LLM tự sinh câu hỏi. Không dùng MCP elicitation — nhiều client chưa hỗ trợ, và một
-tính năng hỏng câm ở đúng client cần nó thì tệ hơn là không có.
+Quyết định đáng nhớ: **lưu bền danh sách thiết bị**, vì mDNS lossy và discovery
+chậm. Ghi theo kiểu write-then-rename để một lần crash không để lại file cụt.
+Merge chứ không thay thế, để một lần quét sót không xoá mất thiết bị đang ngủ.
 
-## 2. Tool — bề mặt phơi ra cho agent
+Ngữ cảnh cho LLM gọi tool nằm trong docstring của từng tool — đó là toàn bộ
+"prompt" mà product này có.
 
-13 tool. Ranh giới quan trọng nhất không phải là tool nào có mà là **tool nào có tác
-dụng phụ không hoàn tác được**:
+## Lớp 2 — Tool (13 tool)
 
-| Nhóm | Tool | Tác dụng phụ |
-|---|---|---|
-| Đọc | `discover_devices`, `list_devices`, `list_speakers`, `get_status` | không |
-| **Phát tiếng** | `say`, `play_media` | **vật lý, không hoàn tác được** |
-| Điều khiển | `play`, `pause`, `stop`, `seek`, `set_volume`, `set_muted`, `quit_app` | có, nhưng đảo ngược được |
+Một tool sinh tác dụng phụ vật lý (`say`), một tool phát media bất kỳ
+(`play_media`), còn lại là điều khiển và truy vấn.
 
-Quy tắc rút ra: **tool có tác dụng phụ vật lý phải đòi tham số tường minh.** `say`
-không có giá trị mặc định cho `target`, và thiếu nó thì nó không làm gì cả — kể cả
-không gọi TTS. Mặc định "phát tất cả" nghe tiện hơn, nhưng một lệnh sai sẽ làm ồn cả
-nhà, và không có nút hoàn tác cho âm thanh đã phát.
+Ràng buộc thiết kế quan trọng nhất: **`say` khi thiếu `target` thì KHÔNG làm
+gì** — nó trả dữ liệu có cấu trúc để LLM hỏi lại người dùng. Không dùng MCP
+elicitation (nhiều client chưa hỗ trợ), không mặc định phát tất cả (sai một lần
+là ồn cả nhà).
 
-Mô tả tool (docstring) là một phần của harness, không phải chú thích: agent chọn tool
-và điền tham số dựa trên đó. Docstring của `say` nói thẳng "If `target` is omitted, no
-audio is played" — chính câu đó ngăn agent tự đoán.
+Chọn thư viện — hai tiêu chuẩn khác nhau, cố ý:
 
-## 3. Execution — chuyện gì xảy ra khi gọi
+- **pychromecast**: KHÔNG qua so sánh nào. Nó là thư viện Python duy nhất còn
+  được bảo trì cho giao thức Cast. Thành phần *xương sống* chọn theo mức bảo trì
+  và độ phủ giao thức.
+- **edge-tts**: qua so sánh 4 phương án (gTTS, Google Cloud TTS, Piper,
+  edge-tts). Tiêu chí kỹ thuật tự chấm được; tiêu chí "nghe có tự nhiên không"
+  thì **bắt buộc người dùng nghe rồi chọn**. Thành phần người dùng *cảm nhận
+  được* thì không chọn hộ.
 
-```
-say(text, target)
-  └─ _select_targets  → thiếu target? dừng tại đây, trả prompt (KHÔNG TTS, KHÔNG cast)
-  └─ tts.synthesize   → mp3, cache theo hash(text|voice|rate|volume)
-  └─ media_server     → URL http://<lan_ip>:8766/<file>   (bind 0.0.0.0)
-  └─ cast song song   → mỗi loa một task, lỗi được bắt riêng từng loa
-```
+## Lớp 3 — Execution
 
-Bốn tính chất thực thi được chọn có chủ ý:
+- pychromecast blocking → mọi tool đẩy sang worker thread bằng
+  `asyncio.to_thread`, event loop MCP không bị chặn.
+- Nhiều loa → `asyncio.gather` chạy song song.
+- **Cô lập lỗi**: mỗi lần cast bọc try/except riêng; một loa chết trả `error`
+  cho riêng nó, các loa khác vẫn phát, kết quả tổng thể vẫn `ok`.
+- Timeout cứng 10 s cho `wait()` và `block_until_active()`.
+- Nối lại thiết bị theo ba nấc: cache trong RAM → địa chỉ đã lưu
+  (`_connect_saved`) → quét lại mDNS. Nấc giữa có vì mDNS sót thiết bị đã lưu
+  từng tạo ra lỗi tự mâu thuẫn: `DeviceNotFoundError` mà lại liệt kê chính thiết
+  bị đó là "known".
 
-- **Chặn sớm.** Nhánh thiếu `target` cắt trước cả TTS. Rẻ hơn, và quan trọng hơn là
-  không để lại tác dụng phụ nào.
-- **Cô lập lỗi.** Mỗi loa một task, `except` riêng. Một loa chết trả `error` cho riêng
-  nó; tổng thể vẫn `ok` nếu có ít nhất một loa phát được. Trong một hệ nhiều thiết bị,
-  luôn có một thiết bị đang treo — nếu nó kéo đổ cả lệnh thì tính năng coi như không
-  dùng được.
-- **Không chặn event loop.** pychromecast là thư viện blocking; mọi lời gọi đi qua
-  `asyncio.to_thread`.
-- **Bền qua tiến trình.** Store ghi hợp nhất theo uuid (write-then-rename), nên một
-  lần quét sót không xoá mất thiết bị đã biết.
+## Lớp 4 — Eval
 
-## 4. Eval — xem `eval/README.md`
+Chi tiết đầy đủ: `eval/README.md`. Tóm tắt hai luật bắt buộc:
 
-Tóm tắt: 35 mục offline (không phát tiếng, exit 0/1) + một tầng `--hardware` phát tiếng
-thật, mặc định tắt.
+1. **Phân tầng theo tác dụng phụ**: mặc định offline (không mạng, không tiếng);
+   `--online` thêm internet nhưng vẫn im lặng; `--hardware` mới phát tiếng thật
+   và phải xin phép. Test không ai dám chạy = bằng không có test.
+2. **Đã kiểm ngược**: đưa lỗi `all`-chồng-nhóm trở lại → 40/43, exit 1, đỏ đúng
+   ba mục về `all`; khôi phục → 43/43, exit 0. Có ghi nhận ngày và số liệu.
 
-Điều đáng ghi vào spec chứ không chỉ vào README eval: **eval này đã được kiểm ngược.**
-Đưa lỗi cũ trở lại thì mục tương ứng FAIL. Một bộ eval chưa từng đỏ là một bộ eval chưa
-biết có hoạt động không.
+Điểm eval KHÔNG với tới: chất lượng âm thanh, mDNS thật, nginx/TLS/systemd, sống
+sót qua reboot, giọng `male`, tham số `rate`.
 
-Và ranh giới của nó: exit code 0 chứng minh **logic** đúng, không chứng minh **âm
-thanh** đúng.
+## Lớp 5 — Feedback
 
-## 5. Feedback — vòng lặp học được gì sau mỗi lần chạy
+Đây là lớp yếu nhất và cần nói thẳng.
 
-Đây là lớp yếu nhất của harness này, và cần nói thẳng vì sao.
+**Chỗ hệ thống không tự báo được, chỉ tai người mới biết:**
 
-**Tín hiệu máy đọc được:** trạng thái Cast (`PLAYING` → `idle_reason=FINISHED`), log
-HTTP của media server (thiết bị có GET file không, mã 200 không), `error` từng loa.
+| Triệu chứng | API báo gì |
+|---|---|
+| Nhóm loa + thành viên cùng nhận luồng → chồng tiếng | **`playing` cho tất cả** — không có tín hiệu nào |
+| Loa nháy đèn rồi tắt (không tải được file) | có thể vẫn báo trạng thái bình thường |
 
-**Tín hiệu máy KHÔNG đọc được — và đây là vấn đề:**
+Hệ quả về phương pháp: với product tác động ra thế giới vật lý, **trạng thái API
+không phải bằng chứng**. Phải có vòng phản hồi bằng giác quan con người. Trong
+dự án này nó tồn tại dưới dạng người dùng nói "đã nghe được rồi" và "chỉ nháy
+sáng rồi tắt".
 
-- Chồng luồng: mọi thiết bị báo `playing`, âm thanh sai.
-- Phát cụt giữa chừng: thiết bị nháy đèn rồi tắt, trạng thái vẫn không tố cáo.
-- Giọng sai, tốc độ sai: không có tín hiệu nào cả.
+**Chỗ có tín hiệu tự động:**
 
-Ba trường hợp trên **chỉ tai người phát hiện được**. Hệ quả cho bất kỳ ai làm việc tiếp
-trên product này: **đừng coi `status: playing` là bằng chứng thành công.** Nó chỉ chứng
-minh lệnh đã được nhận.
+- `service.sh status` in `/proc/<MainPID>/cmdline` — trả lời được câu hỏi "bản
+  sửa đã thực sự được nạp chưa", câu hỏi từng ngốn 3 ngày.
+- `service.sh logs` → journalctl.
+- Log HTTP của media server xác nhận thiết bị CÓ tải file (mã 200) — đây là cách
+  phân biệt "loa không nhận được lệnh" với "loa nhận lệnh nhưng không tải được
+  file".
 
-**Kỷ luật bù lại chỗ mù đó — cái này đã trả giá mới có:**
-
-1. **Giữ lịch sử đo.** Cùng một thiết bị đã từng "phát tốt" (lần đo #4) rồi "nháy đèn
-   rồi tắt" (lần #15). Chỉ nhờ có kết quả đo cũ mới phân định được lỗi thiết bị với hồi
-   quy mã nguồn. Không có lịch sử thì hai thứ đó nhìn giống hệt nhau.
-2. **Người dùng lặp lại "vẫn lỗi" = tín hiệu sai hướng.** Đó không phải lời mời sửa
-   tiếp. Dừng sửa, đi kiểm tra bản sửa đã thực sự được NẠP chưa. Tín hiệu này từng bị
-   bỏ lỡ một vòng, và bản sửa đúng đã nằm sẵn trên đĩa suốt thời gian đó trong khi tiến
-   trình cũ chạy tiếp 3 ngày.
-3. **Kiểm mạng trước khi đọc mã.** `nc -z <ip> 8009`.
-4. **Hai mẫu trùng nhau không phải một quy luật.** Cả hai Nest Hub cùng đóng cổng 8009
-   → đã kết luận sai là "firmware bỏ cổng này". Không phải. Thiết bị treo.
+**Còn thiếu**: không có health check; không có metric; không phát hiện được
+cache phình; không cảnh báo khi địa chỉ đã lưu bị cũ.

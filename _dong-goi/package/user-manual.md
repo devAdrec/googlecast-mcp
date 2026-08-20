@@ -1,75 +1,94 @@
-# Dùng hằng ngày
+# Hướng dẫn sử dụng
 
-Danh sách đầy đủ 13 tool và bảng troubleshooting nằm ở `README.md` gốc
-(mục `## Tools`, `## Troubleshooting`). File này chỉ nói kỹ phần người dùng thật sự
-chạm vào: nói ra loa, và những gì xảy ra khi nó không kêu.
+Dành cho người đã cài xong (theo `README.md` cùng thư mục) và đã nối được MCP
+client. Danh sách 13 tool đầy đủ và **bảng troubleshooting**: xem mục `Tools` và
+`Troubleshooting` trong `README.md` ở gốc repo.
 
-## Nói một câu ra loa
+## Cách dùng thường ngày
 
-Trong Claude Desktop hoặc bất kỳ client MCP nào, cứ nói bằng tiếng thường:
+Bạn không gõ lệnh. Bạn nói với trợ lý AI đang nối vào server này:
 
-> Nói "Cơm đã chín rồi" ở loa bếp
+> "Nói 'Cơm đã chín rồi' ở loa bếp"
 
-Client tự gọi `say(text="Cơm đã chín rồi", target="Kitchen speaker")`.
+Trợ lý gọi tool `say`. Server tổng hợp giọng tiếng Việt, tự phục vụ file audio,
+rồi bảo loa tới lấy.
 
-Chưa biết có loa nào thì hỏi trước: *"có những loa nào?"* → `list_speakers`.
-Lần đầu tiên nó sẽ tự quét mạng, mất vài giây.
+Lần đầu tiên, nếu chưa có loa nào được lưu, hãy bảo trợ lý dò trước: "dò các
+loa trong nhà" (`discover_devices`), rồi "liệt kê loa" (`list_speakers`).
 
-## Các dạng `target`
+## Chọn loa — bốn cách
 
-| Viết gì | Nghĩa |
+| Bạn nói | Server hiểu |
 |---|---|
-| `Kitchen speaker` | một loa, theo đúng tên hiển thị |
-| `Kitchen speaker, Bedroom speaker` | nhiều loa, cách nhau bằng dấu phẩy |
-| `all` hoặc `tất cả` | mọi loa lẻ |
-| `Family speaker group` | một nhóm loa, gọi đích danh bằng tên |
-| *(bỏ trống)* | **không phát gì**; công cụ trả danh sách để client hỏi lại bạn |
+| "ở loa bếp" | đúng một loa, khớp tên không phân biệt hoa thường |
+| "ở loa bếp và loa phòng làm việc" | nhiều loa, phát song song |
+| "ở tất cả các loa" / "all" | mọi loa lẻ |
+| *không nói gì về loa* | **không phát gì cả** — server trả danh sách để trợ lý hỏi lại bạn |
 
-**Vì sao `all` không bao gồm nhóm loa.** Nhóm Cast phát thông qua các loa thành viên
-của nó. Nếu `all` gửi cả nhóm lẫn từng thành viên thì một loa vật lý nhận hai luồng
-cùng lúc — nghe như tiếng vọng hoặc âm chồng lệch pha. Nên `all` chỉ lấy loa lẻ. Muốn
-phát qua nhóm thì gọi tên nhóm.
+Dòng cuối là cố ý. Đoán bừa rồi phát nhầm là làm ồn cả nhà, nên khi không rõ,
+server im lặng và hỏi.
 
-**Cẩn thận với chỗ này khi tự kiểm tra:** trong tình huống chồng luồng, API vẫn báo
-`playing` cho mọi thiết bị. Trạng thái không phát hiện được lỗi. Chỉ nghe mới biết.
-Đây là lý do không nên coi `status: playing` là bằng chứng đã phát đúng.
+Ngoài tên, `target` còn nhận `uuid` của thiết bị.
 
-## Giọng và tốc độ
+## "Tất cả" và nhóm loa
 
+Nếu bạn có **nhóm loa** (speaker group) tạo trong app Google Home:
+
+- "tất cả" **cố ý bỏ qua nhóm**, chỉ gửi tới từng loa lẻ. Vì nhóm phát thông
+  qua chính các thành viên của nó — gửi tới cả hai thì một loa vật lý nhận hai
+  luồng, nghe như vọng/chồng tiếng.
+- Nhóm vẫn dùng được bình thường: gọi đích danh tên nhóm ("phát ở nhóm loa gia
+  đình").
+
+Điều đáng nhớ: khi bị chồng luồng, API vẫn báo mọi thứ `playing`. **Chỉ nghe
+bằng tai mới phát hiện được.** Đừng tin trạng thái API cho loại lỗi này.
+
+## Giọng đọc và tốc độ
+
+- `voice`: `female` (mặc định, `vi-VN-HoaiMyNeural`), `male`
+  (`vi-VN-NamMinhNeural`), hoặc một voice id đầy đủ của edge-tts.
+- `rate`: `-20%` chậm lại, `+10%` nhanh lên.
+
+Trung thực: giọng `male` và tham số `rate` **chưa được nghe thử lần nào**. Chúng
+có trong code và có đường dẫn hợp lệ, nhưng chưa ai xác nhận bằng tai.
+
+## Điều khiển phát
+
+`play`, `pause`, `stop`, `seek`, `set_volume` (0.0–1.0), `set_muted`,
+`quit_app`, `get_status`. Ngoài giọng nói, `play_media` phát được URL media bất
+kỳ mà thiết bị tự tải về được.
+
+## Bốn tình huống hay gặp
+
+**"Loa nháy đèn rồi tắt, không nghe gì."**
+Loa không tải được file. Gần như luôn là tường lửa chặn cổng audio 8766, hoặc
+máy chạy server không cùng LAN với loa. Mở cổng 8766 cho LAN.
+
+**"Loa không phản hồi, `wait timed out after 10 s`."**
+Thiết bị Cast bị treo — chuyện có thật, đã gặp: mDNS thấy nó, ping được, nhưng
+cổng 8009 từ chối kết nối. Kiểm chứng: `nc -z <ip-loa> 8009`. Không thông thì
+rút điện loa cắm lại. Đừng nghi code trước khi làm bước này.
+
+**"Vừa sửa xong mà vẫn lỗi y hệt."**
+Trước khi sửa tiếp, hãy kiểm tra bản sửa đã thực sự được NẠP chưa:
+
+```bash
+./scripts/service.sh status      # in cả dòng lệnh thật của tiến trình đang chạy
 ```
-say(text="...", voice="female")   # mặc định, vi-VN-HoaiMyNeural
-say(text="...", voice="male")     # vi-VN-NamMinhNeural
-say(text="...", rate="-20%")      # chậm lại
-```
 
-Nói thẳng: giọng nam và tham số `rate` **chưa từng được chạy thử lần nào**. Chúng có
-trong mã và về nguyên tắc phải chạy được, nhưng chưa ai nghe. Nếu bạn là người đầu
-tiên thử, hãy coi đó là thử nghiệm chứ không phải tính năng đã kiểm chứng.
+Cài lại service khi nó đang chạy có thể để nguyên tiến trình cũ với code cũ.
 
-Cần internet: edge-tts tổng hợp giọng trên máy chủ Microsoft. Mất mạng thì `say` hỏng,
-còn các tool điều khiển khác vẫn chạy.
+**"Client báo `Failed to fetch (check CORS?)` hoặc lỗi kết nối trống rỗng."**
+Client chạy trong trình duyệt thì phải cài lại service với `--cors-origin`
+khớp **chính xác** địa chỉ trang. Xem `technical-docs.md`.
 
-## Khi nó không kêu
+## Nên biết
 
-Theo thứ tự — hầu hết trường hợp dừng ở bước 1 hoặc 2:
-
-1. **Loa có bắt kết nối không?** `nc -z <ip-loa> 8009`. Thiết bị Cast thỉnh thoảng
-   treo: mDNS thấy, ping thông, mà cổng 8009 vẫn từ chối. Rút điện cắm lại là hết.
-   Làm bước này **trước** khi nghi ngờ phần mềm.
-2. **Loa có tải được file audio về không?** Nó phải gọi ngược về máy chủ qua cổng
-   8766. Firewall chặn chiều đó thì mọi thứ báo `playing` mà im lặng.
-3. **Server có đang chạy đúng tham số không?** `./scripts/service.sh status` và đọc
-   dòng `cmdline`. Cài lại mà quên khởi động lại thì tiến trình cũ vẫn chạy cấu hình
-   cũ, trông y hệt như đã cài xong.
-4. **Đèn nháy rồi tắt ngay, không phát hết câu.** Đã gặp trên Nest Hub. Không phải lỗi
-   cast: đó là thiết bị. Kiểm bằng cách phát cùng câu đó lên một loa khác — nếu loa kia
-   kêu đủ thì vấn đề nằm ở thiết bị. Giữ lại kết quả các lần đo trước, vì đó là thứ duy
-   nhất phân biệt được "thiết bị hỏng" với "code vừa hồi quy".
-
-Còn lại: `## Troubleshooting` trong `README.md` gốc.
-
-## Điều nên biết trước khi mở ra internet
-
-Server **không có xác thực**. Nếu nó nằm sau một tên miền công khai, ai biết URL cũng
-phát được tiếng trong nhà bạn. Đây là trạng thái hiện tại của bản triển khai thật,
-không phải cảnh báo lý thuyết.
+- Nói lại đúng một câu đã nói trước đó thì gần như tức thì — file mp3 được cache
+  theo nội dung. Cache **tăng vô hạn**, chưa tự dọn: nằm ở
+  `/tmp/googlecast-mcp-tts` (hoặc `GOOGLECAST_MCP_CACHE`), thỉnh thoảng tự xoá.
+- Thông báo **không** khôi phục lại nhạc/âm lượng bạn đang nghe trước đó.
+- Cần internet cho mỗi câu chưa từng nói (edge-tts là dịch vụ online).
+- Danh sách loa lưu ở `~/.googlecast-mcp/speakers.json`, sống qua khởi động lại.
+- **Ai truy cập được URL server đều phát được tiếng trong nhà bạn.** Không có
+  xác thực. Cân nhắc kỹ trước khi mở ra internet.
