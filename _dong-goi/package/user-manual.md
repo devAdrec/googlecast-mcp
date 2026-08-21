@@ -1,94 +1,86 @@
-# Hướng dẫn sử dụng
+# Dùng hằng ngày
 
-Dành cho người đã cài xong (theo `README.md` cùng thư mục) và đã nối được MCP
-client. Danh sách 13 tool đầy đủ và **bảng troubleshooting**: xem mục `Tools` và
-`Troubleshooting` trong `README.md` ở gốc repo.
+Dành cho người đã cài xong (theo `README.md` trong thư mục này) và giờ chỉ muốn
+sai loa nói.
 
-## Cách dùng thường ngày
+## Nói một câu
 
-Bạn không gõ lệnh. Bạn nói với trợ lý AI đang nối vào server này:
+Bạn không gõ lệnh. Bạn nói với Claude bằng tiếng thường:
 
-> "Nói 'Cơm đã chín rồi' ở loa bếp"
+> Nói "Cơm đã chín rồi" ở loa bếp
 
-Trợ lý gọi tool `say`. Server tổng hợp giọng tiếng Việt, tự phục vụ file audio,
-rồi bảo loa tới lấy.
+Claude sẽ gọi tool `say`. Nếu bạn **không** nói loa nào:
 
-Lần đầu tiên, nếu chưa có loa nào được lưu, hãy bảo trợ lý dò trước: "dò các
-loa trong nhà" (`discover_devices`), rồi "liệt kê loa" (`list_speakers`).
+> Nói "Cơm đã chín rồi"
 
-## Chọn loa — bốn cách
+thì **không có tiếng nào phát ra**. Tool trả về danh sách loa và Claude quay lại
+hỏi bạn "phát ở loa nào?". Đây là hành vi cố ý: phát nhầm ra tiếng trong nhà là
+việc không rút lại được.
 
-| Bạn nói | Server hiểu |
+## Các cách chỉ định loa
+
+| Bạn nói | Kết quả |
 |---|---|
-| "ở loa bếp" | đúng một loa, khớp tên không phân biệt hoa thường |
-| "ở loa bếp và loa phòng làm việc" | nhiều loa, phát song song |
-| "ở tất cả các loa" / "all" | mọi loa lẻ |
-| *không nói gì về loa* | **không phát gì cả** — server trả danh sách để trợ lý hỏi lại bạn |
+| `loa bếp` (một tên) | chỉ loa đó |
+| `loa bếp, loa phòng ngủ` | cả hai, phát song song, cùng một file âm thanh |
+| `tất cả` / `all` / `everyone` / `*` | mọi loa lẻ |
+| tên một **nhóm loa** | phát qua nhóm đó |
 
-Dòng cuối là cố ý. Đoán bừa rồi phát nhầm là làm ồn cả nhà, nên khi không rõ,
-server im lặng và hỏi.
+**Điều đáng biết về "tất cả":** nó cố ý **bỏ qua các nhóm loa**. Một nhóm phát
+thông qua chính các thành viên của nó, nên nếu gửi cả nhóm lẫn thành viên thì
+một cái loa vật lý nhận hai luồng âm thanh cùng lúc — nghe méo, chồng tiếng.
+Nhóm vẫn phát được bình thường nếu bạn **gọi đích danh tên nhóm**.
 
-Ngoài tên, `target` còn nhận `uuid` của thiết bị.
+Đây là lỗi từng có thật, và đáng nhớ vì lý do khác: **cả bốn thiết bị đều báo
+`playing`, API hoàn toàn không phát hiện được gì bất thường.** Chỉ có tai người
+mới biết. Việc gì có tác dụng ra thế giới vật lý thì trạng thái API xanh không
+phải là bằng chứng nó đúng.
 
-## "Tất cả" và nhóm loa
+## Giọng và tốc độ
 
-Nếu bạn có **nhóm loa** (speaker group) tạo trong app Google Home:
+| Muốn | Nói thêm |
+|---|---|
+| giọng nữ (mặc định) | không cần nói gì |
+| giọng nam | "giọng nam" — `vi-VN-NamMinhNeural` |
+| đọc chậm lại | "chậm hơn" — tương ứng `rate="-20%"` |
+| đọc nhanh lên | "nhanh hơn" — `rate="+10%"` |
 
-- "tất cả" **cố ý bỏ qua nhóm**, chỉ gửi tới từng loa lẻ. Vì nhóm phát thông
-  qua chính các thành viên của nó — gửi tới cả hai thì một loa vật lý nhận hai
-  luồng, nghe như vọng/chồng tiếng.
-- Nhóm vẫn dùng được bình thường: gọi đích danh tên nhóm ("phát ở nhóm loa gia
-  đình").
+> Giọng nam và tham số tốc độ **chưa được nghe kiểm chứng bằng tai**. Chúng có
+> tổng hợp ra file mp3 khác rỗng (bộ eval `--online` xác nhận), nhưng chưa ai
+> ngồi nghe xem có tự nhiên không.
 
-Điều đáng nhớ: khi bị chồng luồng, API vẫn báo mọi thứ `playing`. **Chỉ nghe
-bằng tai mới phát hiện được.** Đừng tin trạng thái API cho loại lỗi này.
+## Các tool khác
 
-## Giọng đọc và tốc độ
+Ngoài `say` còn 12 tool nữa: `discover_devices`, `list_speakers`,
+`list_devices`, `get_status`, `play_media`, `play`, `pause`, `stop`, `seek`,
+`set_volume`, `set_muted`, `quit_app`. Mô tả đầy đủ ở mục **Tools** trong
+`README.md` gốc repo.
 
-- `voice`: `female` (mặc định, `vi-VN-HoaiMyNeural`), `male`
-  (`vi-VN-NamMinhNeural`), hoặc một voice id đầy đủ của edge-tts.
-- `rate`: `-20%` chậm lại, `+10%` nhanh lên.
+Vài câu hay dùng:
 
-Trung thực: giọng `male` và tham số `rate` **chưa được nghe thử lần nào**. Chúng
-có trong code và có đường dẫn hợp lệ, nhưng chưa ai xác nhận bằng tai.
+> Có những loa nào trong nhà? → `list_speakers`
+> Dò lại thiết bị đi → `discover_devices`
+> Loa bếp đang phát gì? → `get_status`
+> Tắt loa phòng ngủ đi → `stop`
+> Vặn loa bếp xuống 30% → `set_volume`
 
-## Điều khiển phát
+## Khi trục trặc
 
-`play`, `pause`, `stop`, `seek`, `set_volume` (0.0–1.0), `set_muted`,
-`quit_app`, `get_status`. Ngoài giọng nói, `play_media` phát được URL media bất
-kỳ mà thiết bị tự tải về được.
+| Triệu chứng | Nghĩ tới điều này trước |
+|---|---|
+| "Không thấy loa nào" | Server có **cùng LAN với loa** không? Dò dùng mDNS, không qua được router. Bảo Claude `discover_devices` một lần. |
+| Một loa cụ thể không phát, các loa khác vẫn ổn | Thiết bị treo. Kiểm `nc -z <ip-loa> 8009`. Refuse thì **khởi động lại cái loa** — không phải lỗi phần mềm. Từng mất 3 lần thử rải 2 ngày mới ra. |
+| Loa nháy sáng rồi tắt, không phát hết câu | Loa không tải được file âm thanh. Kiểm cổng media (8766) có bị tường lửa chặn không. |
+| Claude nói đã phát mà nhà im lặng | Xem `audio_url` trong kết quả rồi thử `curl` chính URL đó từ một máy khác. Tải được thì lỗi ở loa, không tải được thì lỗi ở mạng/cổng. |
+| Client không kết nối được | Xem bảng mã lỗi trong `technical-docs.md` mục 7. |
+| Đã sửa mà lỗi y hệt như cũ | **Dừng sửa.** Nhiều khả năng tiến trình cũ chưa được nạp lại: `./scripts/service.sh status`, đọc dòng lệnh thật in ra từ `/proc`. |
 
-## Bốn tình huống hay gặp
+Phần troubleshooting đầy đủ hơn: mục **Troubleshooting** trong `README.md` gốc
+repo.
 
-**"Loa nháy đèn rồi tắt, không nghe gì."**
-Loa không tải được file. Gần như luôn là tường lửa chặn cổng audio 8766, hoặc
-máy chạy server không cùng LAN với loa. Mở cổng 8766 cho LAN.
+## Nên biết trước khi dùng thật
 
-**"Loa không phản hồi, `wait timed out after 10 s`."**
-Thiết bị Cast bị treo — chuyện có thật, đã gặp: mDNS thấy nó, ping được, nhưng
-cổng 8009 từ chối kết nối. Kiểm chứng: `nc -z <ip-loa> 8009`. Không thông thì
-rút điện loa cắm lại. Đừng nghi code trước khi làm bước này.
-
-**"Vừa sửa xong mà vẫn lỗi y hệt."**
-Trước khi sửa tiếp, hãy kiểm tra bản sửa đã thực sự được NẠP chưa:
-
-```bash
-./scripts/service.sh status      # in cả dòng lệnh thật của tiến trình đang chạy
-```
-
-Cài lại service khi nó đang chạy có thể để nguyên tiến trình cũ với code cũ.
-
-**"Client báo `Failed to fetch (check CORS?)` hoặc lỗi kết nối trống rỗng."**
-Client chạy trong trình duyệt thì phải cài lại service với `--cors-origin`
-khớp **chính xác** địa chỉ trang. Xem `technical-docs.md`.
-
-## Nên biết
-
-- Nói lại đúng một câu đã nói trước đó thì gần như tức thì — file mp3 được cache
-  theo nội dung. Cache **tăng vô hạn**, chưa tự dọn: nằm ở
-  `/tmp/googlecast-mcp-tts` (hoặc `GOOGLECAST_MCP_CACHE`), thỉnh thoảng tự xoá.
-- Thông báo **không** khôi phục lại nhạc/âm lượng bạn đang nghe trước đó.
-- Cần internet cho mỗi câu chưa từng nói (edge-tts là dịch vụ online).
-- Danh sách loa lưu ở `~/.googlecast-mcp/speakers.json`, sống qua khởi động lại.
-- **Ai truy cập được URL server đều phát được tiếng trong nhà bạn.** Không có
-  xác thực. Cân nhắc kỹ trước khi mở ra internet.
+- **Ai tới được endpoint là điều khiển được loa nhà bạn.** Không có xác thực ở
+  tầng ứng dụng. Nếu đã mở ra tên miền công khai thì hãy chặn IP ở nginx.
+- Thư mục cache âm thanh chỉ tăng dần, chưa tự dọn. Thỉnh thoảng xoá tay.
+- Thông báo chen ngang sẽ **không** khôi phục lại nhạc đang nghe dở.

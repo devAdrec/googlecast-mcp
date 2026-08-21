@@ -1,108 +1,237 @@
-# Bộ eval của googlecast-mcp
+# Bộ kiểm googlecast-mcp
 
-Trước khi đóng gói, product này **không có một test nào**. Đây là lỗ hổng lớn
-nhất của nó. Bộ eval này vá được một phần — nó không phải test suite đầy đủ, mà
-là lớp canh những hành vi mà nếu hỏng thì hoặc là im lặng, hoặc là gây ồn trong
-nhà người khác.
-
-## Ba tầng, chia theo TÁC DỤNG PHỤ
-
-Nguyên tắc: **tầng mặc định không được có tác dụng phụ nào.** Một bộ test mà
-không ai dám chạy thì bằng không có test.
-
-| Tầng | Lệnh | Tác dụng phụ | Chạy được khi |
-|---|---|---|---|
-| offline (mặc định) | `python eval-googlecast-mcp.py` | **không có** | mọi máy, mọi lúc, kể cả CI, kể cả 2 giờ sáng |
-| online | `... --online` | gọi ra internet (edge-tts). Không phát tiếng. | có mạng ra ngoài |
-| hardware | `... --hardware --speaker "Kitchen speaker"` | **PHÁT TIẾNG THẬT trong nhà người ta** | phải xin phép trước |
-
-Chạy đầy đủ:
+Một file: `eval-googlecast-mcp.py`. Không cần pytest — chạy được ngay sau
+`uv sync` trên một bản clone trắng.
 
 ```bash
-uv run --directory /storage/apps/mcp/googlecast_mcp python \
-    /storage/apps/mcp/googlecast_mcp/_dong-goi/package/eval/eval-googlecast-mcp.py
+uv run python _dong-goi/package/eval/eval-googlecast-mcp.py            # 62 mục, không tiếng
+uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --online   # +10 mục, cần internet, vẫn không tiếng
+uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --hardware --speaker "Kitchen speaker"
 ```
 
-In pass/fail từng mục, exit 0 nếu tất cả xanh, 1 nếu có mục đỏ.
+Thoát 0 khi mọi mục được chọn đều xanh.
 
-Kết quả gần nhất (2026-08-20): offline **43/43 pass, exit 0**; với `--online`
-**45/45 pass, exit 0**. Tầng `--hardware` **chưa chạy trong phiên đóng gói này**
-(chưa xin phép người dùng).
+## Phân tầng theo tác dụng phụ
 
-## Bộ eval canh những gì
+Product này gây tác dụng phụ **vật lý**: nó phát tiếng thật trong nhà người ta.
+Một bộ test mà không ai dám chạy thì bằng không có. Nên tầng mặc định được kéo
+xuống mức **không tác dụng phụ nào**, và những gì có tác dụng phụ thì phải bật
+tường minh.
 
-- **Bề mặt tool**: import được; đúng 13 tool, đúng tên; tool nào cũng có mô tả.
-- **Yêu cầu 3 — không chọn loa thì phải hỏi**: trả `needs_speaker_selection`,
-  và quan trọng hơn: **không tổng hợp giọng, không cast**. Kiểm bằng spy ghi lại
-  lời gọi, rồi khẳng định spy RỖNG. Đây là kiểu kiểm "chứng minh việc gì đó đã
-  KHÔNG xảy ra" — với product có tác dụng phụ vật lý thì nó quan trọng hơn kiểm
-  việc gì đó đã xảy ra.
-- **`all` không được chồng nhóm với thành viên** (xem phần kiểm ngược bên dưới).
-- **Cô lập lỗi**: một loa chết không được kéo theo các loa khác.
-- **Lọc loa / thiết bị hình ảnh**, đoán MIME type, chọn giọng.
-- **Allowlist transport**: có host trần không kèm port, có scheme `https`, và
-  wildcard bind `0.0.0.0` không lọt vào danh sách tin cậy. Cả ba đều từ sự cố
-  421/403 thật.
-- **Text rỗng bị chặn** trước khi có bất cứ tác dụng phụ nào.
+| Tầng | Cờ | Cần gì | Gây ra gì |
+|---|---|---|---|
+| offline | (mặc định) | không gì cả | không mạng, không tiếng, không chạm thiết bị thật |
+| online | `--online` | internet | tổng hợp mp3 thật, **vẫn không tiếng** |
+| hardware | `--hardware` | loa thật, cùng LAN | **PHÁT TIẾNG THẬT** |
 
-## KIỂM NGƯỢC — bộ eval này đã từng ĐỎ
+Tầng mặc định còn trỏ `GOOGLECAST_MCP_STORE` và `GOOGLECAST_MCP_CACHE` vào thư
+mục tạm **trước khi import** server, nên một lần chạy eval không bao giờ đọc hay
+ghi đè `~/.googlecast-mcp/speakers.json` thật.
 
-Một bộ eval chưa bao giờ đỏ thì chưa chứng minh được điều gì: nó có thể đang
-kiểm sai chỗ, hoặc kiểm một điều luôn đúng. Nên trước khi tin nó, phải đưa một
-lỗi ĐÃ BIẾT trở lại và xem nó có bắt được không.
+## Bộ dữ liệu giả dựng lại đúng cái nhà thật
 
-**Lỗi dùng để kiểm ngược**: `all` gửi tới cả nhóm loa lẫn thành viên của nhóm
-(lỗi thật, đã sửa ở commit `fcf4035`).
+Bốn "loa" trong fixture cố ý tái hiện tình huống đã sinh ra lỗi: **`Family
+speaker group` và `Kitchen speaker` cùng nằm ở `192.168.1.22`** — nhóm và một
+thành viên của nó là **cùng một cái loa vật lý**. Không có chi tiết này thì
+không test nào bắt được lỗi chồng luồng.
 
-### Quy trình — lặp lại được
+## Kiểm ngược: có tuyên bố kỳ vọng TRƯỚC
 
-1. Bảo đảm cây làm việc sạch: `git diff --quiet src/googlecast_mcp/server.py`
-2. Đưa lỗi trở lại — trong `_select_targets` (`server.py`), thay dòng
-   `return [s["friendly_name"] for s in speakers if s["cast_type"] != "group"], None`
-   bằng `return names, None` (đúng dạng nguyên bản trước khi sửa).
-3. Chạy eval offline.
-4. Khôi phục: `git checkout -- src/googlecast_mcp/server.py`
-5. Chạy lại eval offline.
+Một bộ test chưa từng đỏ là một bộ test chưa chứng minh được gì. Quy trình bắt
+buộc ở đây là **liệt kê trước** những mục phải đỏ, rồi mới đưa lỗi vào.
 
-### Kết quả đã ghi nhận (2026-08-20)
+**Lỗi dùng để kiểm ngược:** hoàn nguyên commit `fcf4035` — cho `all` gộp cả
+nhóm loa trở lại. Đây đúng là lỗi đã có thật.
 
-| Bước | Kết quả |
+### Bước 1 — Kỳ vọng, viết ra trước khi chạy
+
+Dự kiến 8 mục đỏ, tổng 54/62:
+
+1. `'all' excludes speaker groups`
+2. `'all' hits no physical device twice (compared by host, not name)`
+3. `'all' still reaches every individual speaker`
+4. `'tất cả' means every speaker, groups excluded`
+5. `'tat ca' means every speaker, groups excluded`
+6. `'everyone' means every speaker, groups excluded`
+7. `'*' means every speaker, groups excluded`
+8. `'ALL' means every speaker, groups excluded`
+
+Mọi mục còn lại: xanh.
+
+### Bước 2 — Đưa lỗi vào và chạy
+
+```
+54/62 checks passed
+
+failed:
+  - 'all' excludes speaker groups
+      (cast to ['Family speaker group', 'Kitchen speaker', 'Bedroom speaker', 'Office speaker'])
+  - 'all' hits no physical device twice (compared by host, not name)
+      (hosts=['192.168.1.22', '192.168.1.22', '192.168.1.23', '192.168.1.24']
+       from ['Family speaker group', 'Kitchen speaker', 'Bedroom speaker', 'Office speaker'])
+  - 'all' still reaches every individual speaker
+  - 'tất cả' means every speaker, groups excluded
+  - 'tat ca' means every speaker, groups excluded
+  - 'everyone' means every speaker, groups excluded
+  - '*' means every speaker, groups excluded
+  - 'ALL' means every speaker, groups excluded
+```
+
+### Bước 3 — So kỳ vọng với thực tế
+
+| | |
 |---|---|
-| Có lỗi | **40/43, exit 1** |
-| Mục đỏ | `all: no speaker group included`<br>`all: every individual speaker included`<br>`all: Vietnamese 'tất cả' means the same thing` |
-| Sau khi khôi phục | **43/43, exit 0** |
+| Kỳ vọng đỏ | 8 mục |
+| Thực tế đỏ | 8 mục, **đúng y danh sách trên** |
+| **Lẽ ra đỏ mà xanh (TEST GIẢ)** | **không có** |
+| Lẽ ra xanh mà đỏ | không có |
 
-Đỏ đúng ba mục nói về `all`, không đỏ lan sang mục khác. Đó là điều cần thấy:
-eval không chỉ biết đỏ, mà đỏ **đúng chỗ**.
+### Bước 4 — Khôi phục và xác minh sạch
 
-### Một điều bộ eval tự phơi ra về chính nó
+```
+$ git checkout -- src/googlecast_mcp/server.py
+$ git diff --stat -- src/ scripts/
+(rỗng)
+$ uv run python _dong-goi/package/eval/eval-googlecast-mcp.py
+62/62 checks passed   (exit 0)
+```
 
-Khi có lỗi, mục `all: no duplicate physical device` **vẫn xanh**. Nó so trùng
-theo TÊN, mà nhóm và thành viên có tên khác nhau — nên nó mù trước đúng loại
-trùng lặp đang xảy ra (trùng ở mức thiết bị vật lý, không phải mức tên). Mục
-thật sự bắt được lỗi là mục lọc theo `cast_type`.
+## TEST GIẢ đã bắt được và đã sửa
 
-Giữ lại ghi chú này thay vì lặng lẽ xoá mục kia, vì nó là bài học: **một mục
-kiểm luôn xanh có thể đang tạo cảm giác an toàn giả**. Chỉ có kiểm ngược mới lộ
-ra được.
+Phiên đóng gói trước có một mục tên `all: no duplicate physical device`. Khi
+đưa đúng lỗi này vào, **nó vẫn xanh** — trong khi lỗi đang tồn tại rành rành.
 
-## Fixture
+Lý do: nó so trùng lặp theo **tên**. Mà nhóm loa và thành viên của nó có tên
+khác nhau. Nên nó mù hoàn toàn trước dạng trùng lặp duy nhất có ý nghĩa ở đây:
+trùng ở mức **thiết bị vật lý**.
 
-Dữ liệu giả trong eval để `Family speaker group` và `Kitchen speaker` **cùng
-host `192.168.1.22`** — đúng cấu hình thật đã làm lỗi chồng luồng nghe thấy
-được. Fixture không nên là dữ liệu tròn trịa; nó nên mang hình dạng của sự cố đã
-xảy ra.
+Phiên đó chỉ **ghi chú lại** rằng mục này không bắt được lỗi. Ghi chú không sửa
+được gì: mục test vẫn xanh, người đọc bảng kết quả vẫn tưởng đã được bảo vệ.
+Lần này nó được **sửa thật**: so theo `host`, không theo tên.
 
-## Bộ eval này KHÔNG canh được gì
+```python
+hosts_hit = [HOST_BY_NAME[n] for n in names if n in HOST_BY_NAME]
+check("'all' hits no physical device twice (compared by host, not name)",
+      len(hosts_hit) == len(set(hosts_hit)), ...)
+```
 
-Nói thẳng, để người sau không tưởng nhầm là đã an toàn:
+Bằng chứng nó thật sự bắt được: ở bước 2 phía trên nó nằm trong danh sách đỏ,
+kèm đúng hai lần `192.168.1.22`.
 
-- Không canh chất lượng âm thanh, không canh việc loa phát **đủ độ dài** (mới
-  chỉ đo tay 3 clip).
-- Không canh mDNS / hành vi mạng thật.
-- Không canh cấu hình nginx, TLS, hay unit systemd.
-- Không canh việc service sống sót qua reboot.
-- Không canh giọng `male`, không canh tham số `rate`.
-- **Không canh được lỗi chồng luồng ở đời thật** — nhớ rằng khi lỗi đó xảy ra,
-  API báo `playing` cho mọi thiết bị. Tầng offline chỉ canh được phần logic
-  chọn loa, tức là canh NGUYÊN NHÂN chứ không canh được HẬU QUẢ.
+**Bài học chung:** một mục test xanh trong khi lỗi đang tồn tại thì nguy hiểm
+hơn hẳn một mục test không tồn tại — nó tạo ra cảm giác đã được che chắn. Chỉ
+kiểm ngược mới lôi được nó ra, và chỉ khi kỳ vọng được viết ra **trước**.
+
+## Một lỗi thật của chính bộ eval, tìm ra trong phiên này
+
+Tầng offline thay `tts.synthesize` **trên chính module object**, mà module thì
+mọi nơi import đều dùng chung. Hậu quả: khi tầng `--online` chạy sau, nó đo
+đúng cái hàm giả của mình, chứ không phải TTS thật. Triệu chứng là "mp3 0 byte"
+— và nếu chỉ nhìn thoáng qua thì rất dễ kết luận nhầm rằng edge-tts hỏng.
+
+Đã sửa: giữ lại tham chiếu tới hàm thật, khôi phục trước khi tầng online đo, và
+thêm hẳn một mục canh gác:
+
+```
+PASS  the online tier is testing the real synthesize, not the fake
+```
+
+Một bộ eval cũng là mã nguồn, cũng hỏng được, và nó hỏng theo hướng **xanh
+giả**.
+
+### Rò lần thứ hai — cùng một họ, phát hiện khi chạy tầng hardware
+
+Mục canh gác trên chỉ che đường TTS. Tầng hardware sau đó vẫn **FAIL** với
+`no speaker answered mDNS`, trong khi loa vẫn sống (cổng 8009 mở) và một lần
+`say` thủ công vẫn phát được bình thường.
+
+Nguyên nhân: phép thử "mạng rỗng" thay `list_speakers` và `discover` lên chính
+`server._manager` rồi **không khôi phục**. Tầng hardware dùng lại đúng object
+đó, nên nó "dò" thấy cái mạng rỗng mà phép thử trước dựng ra. Đổi biến môi
+trường store và reload module không cứu được, vì cái hỏng nằm ở object đã bị
+sửa, không phải ở cấu hình.
+
+Đã sửa: tầng hardware **dựng `CastManager` mới** thay vì tin object dùng chung,
+kèm một mục canh gác nữa:
+
+```
+PASS  hardware tier holds a real manager, not an offline stub
+```
+
+Bài học: một mục canh gác chỉ bảo vệ **đúng một** đường bị mock. Mỗi thứ tầng
+trước thay thế đều cần canh gác riêng — và cách rẻ nhất để tìm ra là **chạy
+tầng sau và hỏi tại sao nó đỏ**, thay vì cho rằng mạng đang trục trặc.
+
+## Bảng phủ
+
+| Nhóm | Số mục | Phủ điều gì |
+|---|---|---|
+| import + bề mặt tool | 4 | import được; đúng 13 tool; đúng tên; tool nào cũng có mô tả |
+| đoán content type | 6 | mp3/mp4/hls, có query string, chữ hoa, đuôi lạ |
+| phân loại loa | 4 | `audio`/`group` là loa, `cast` thì không, thiếu trường thì không |
+| giọng đọc | 5 | mặc định, `female`/`male`, khoảng trắng và chữ hoa, id đầy đủ |
+| allowlist transport | 9 | **có scheme https**, **có host trần không port**, loopback, `0.0.0.0` không tự vào allowlist, origin trình duyệt |
+| kho thiết bị | 5 | kho rỗng, lưu-đọc, gộp theo uuid, giữ địa chỉ mới, lọc loa |
+| `say` thiếu loa | 5 | `needs_speaker_selection`, **không cast**, **không gọi TTS**, có danh sách loa |
+| `say` với `all` | 7 | bỏ nhóm, **không trùng thiết bị vật lý theo host**, tổng hợp đúng một lần, chung một URL |
+| từ khoá "tất cả" | 5 | `tất cả`, `tat ca`, `everyone`, `*`, `ALL` |
+| chỉ định tường minh | 3 | nhóm gọi đích danh vẫn phát, danh sách cách phẩy, khoảng trắng thừa |
+| cô lập lỗi | 5 | loa hỏng không kéo loa tốt chết theo; không loa nào phát thì báo `failed` |
+| text rỗng | 2 | `ValueError`, không cast |
+| mạng không có loa | 2 | `no_speakers_found`, không cast |
+| **online** | 10 | canh gác hàm thật, mp3 khác rỗng, đúng magic byte, dùng lại cache, đổi giọng/tốc độ ra file khác |
+| **hardware** | 4 | dò được loa thật, cast thật, thiết bị báo trạng thái media |
+
+## Diễn tập Definition of Done
+
+Chạy lại đúng từng lệnh trong `../README.md` trên một bản clone trắng, cổng
+8799 (không đụng dịch vụ thật ở 8765/8766).
+
+```
+### STEP 1 — uv 0.11.21 (x86_64-unknown-linux-gnu)
+### STEP 2 — cloned; thấy pyproject.toml, src/, scripts/, uv.lock
+### STEP 3 — uv sync: cài xong (uvicorn, zeroconf, yarl, …)
+### STEP 4 — uv run googlecast-mcp --help → in bảng tuỳ chọn có --transport {stdio,http,sse}
+### STEP 5 — stdio qua pipe:
+initialize ok: {'name': 'googlecast-mcp', 'version': '1.29.0'} 2024-11-05
+tools/list count: 13
+tools: discover_devices, get_status, list_devices, list_speakers, pause, play,
+       play_media, quit_app, say, seek, set_muted, set_volume, stop
+### STEP 6 — HTTP 127.0.0.1:8799
+initialize → 200, serverInfo googlecast-mcp
+session id: 6346b31b12674dee8d7904189202bbe1
+tools/list count: 13
+tools/call say (cố ý không chọn loa):
+  status: needs_speaker_selection
+  speakers offered: ['Kitchen speaker', 'Family speaker group',
+                     'Bedroom speaker', 'Spa speaker']
+### STEP 7 — 8799 đã đóng; 8765/8766 của dịch vụ thật vẫn nguyên
+```
+
+Mục cuối là bằng chứng mạnh nhất: đó là một **lần gọi tool thật**, đi hết chuỗi
+client → MCP → dò mạng → và trả về **tên loa thật trong nhà**. Nó cũng không
+phát ra tiếng nào, nên diễn tập DoD an toàn để chạy lại bất cứ lúc nào.
+
+## Số liệu các lần chạy
+
+| Lần | Tầng | Kết quả |
+|---|---|---|
+| bản đóng gói này | offline | **62/62**, exit 0 |
+| bản đóng gói này | offline + online | **72/72**, exit 0 |
+| bản đóng gói này | offline, có lỗi cấy vào | 54/62, đúng 8 mục kỳ vọng |
+| bản đóng gói này | `--hardware` | **CHƯA CHẠY** — cần người dùng cho phép |
+| hai phiên trước | offline | 35/35, rồi 43/43 |
+| hai phiên trước | `--hardware` | 37/37, rồi 48/48 |
+
+## Chưa phủ, nói thẳng
+
+- **Giọng nam và tham số `rate` chưa được nghe.** Eval chỉ chứng minh chúng ra
+  file mp3 khác rỗng, khác nhau. Chất lượng nghe được thì chưa ai kiểm.
+- **Dịch vụ sống sót qua reboot máy:** đã `systemctl enable`, **chưa reboot bao
+  giờ**.
+- **Địa chỉ đã lưu bị cũ** (loa đổi IP) → nhánh quét lại trong `_connect_saved`
+  chưa từng chạy trong test.
+- **Chặn IP ở nginx** đã bàn và đã đồng ý bật, nhưng hai dòng vẫn đang comment.
+- **Tầng hardware** chỉ kiểm được API báo `playing`. Chuyện âm thanh có thật sự
+  đúng hay không thì API mù — chính lỗi chồng luồng đã chứng minh điều đó. Chỗ
+  này không có cách tự động hoá; phải có tai người.
