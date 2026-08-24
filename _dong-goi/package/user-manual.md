@@ -1,86 +1,114 @@
-# Dùng hằng ngày
+# Hướng dẫn dùng
 
-Dành cho người đã cài xong (theo `README.md` trong thư mục này) và giờ chỉ muốn
-sai loa nói.
+Dành cho người đã cài xong (`README.md`) và muốn nói một câu ra loa.
 
 ## Nói một câu
 
-Bạn không gõ lệnh. Bạn nói với Claude bằng tiếng thường:
+```
+say(text="Cơm đã chín rồi", target="Kitchen speaker")
+```
 
-> Nói "Cơm đã chín rồi" ở loa bếp
+Trong Claude, không cần gõ tên tool — nói thẳng *"báo lên loa bếp là cơm chín
+rồi"* là đủ.
 
-Claude sẽ gọi tool `say`. Nếu bạn **không** nói loa nào:
+| Tham số | Bắt buộc | Nghĩa |
+|---|---|---|
+| `text` | có | Câu cần nói. Tiếng Việt có dấu chạy tốt. Rỗng thì bị từ chối |
+| `target` | **không** | Loa nào. Bỏ trống là cố ý — xem dưới |
+| `voice` | không | `female` (mặc định), `male`, hoặc một voice id edge-tts đầy đủ |
+| `rate` | không | Tốc độ nói, ví dụ `-20%` chậm lại, `+10%` nhanh lên |
 
-> Nói "Cơm đã chín rồi"
+## Các dạng `target`
 
-thì **không có tiếng nào phát ra**. Tool trả về danh sách loa và Claude quay lại
-hỏi bạn "phát ở loa nào?". Đây là hành vi cố ý: phát nhầm ra tiếng trong nhà là
-việc không rút lại được.
-
-## Các cách chỉ định loa
-
-| Bạn nói | Kết quả |
+| Gõ gì | Xảy ra gì |
 |---|---|
-| `loa bếp` (một tên) | chỉ loa đó |
-| `loa bếp, loa phòng ngủ` | cả hai, phát song song, cùng một file âm thanh |
-| `tất cả` / `all` / `everyone` / `*` | mọi loa lẻ |
-| tên một **nhóm loa** | phát qua nhóm đó |
+| `"Kitchen speaker"` | Phát ở đúng loa đó |
+| `"Kitchen speaker, Office speaker"` | Phát ở cả hai, song song |
+| `"all"` hoặc `"tất cả"` | Phát ở mọi loa **thật**, mỗi loa đúng một lần |
+| `"Family speaker group"` | Phát qua nhóm loa, như trong app Google Home |
+| bỏ trống | **Không phát gì.** Trả về danh sách loa để hỏi lại bạn |
+| một UUID | Cũng được, nếu hai loa trùng tên |
 
-**Điều đáng biết về "tất cả":** nó cố ý **bỏ qua các nhóm loa**. Một nhóm phát
-thông qua chính các thành viên của nó, nên nếu gửi cả nhóm lẫn thành viên thì
-một cái loa vật lý nhận hai luồng âm thanh cùng lúc — nghe méo, chồng tiếng.
-Nhóm vẫn phát được bình thường nếu bạn **gọi đích danh tên nhóm**.
+Tên loa không phân biệt hoa thường.
 
-Đây là lỗi từng có thật, và đáng nhớ vì lý do khác: **cả bốn thiết bị đều báo
-`playing`, API hoàn toàn không phát hiện được gì bất thường.** Chỉ có tai người
-mới biết. Việc gì có tác dụng ra thế giới vật lý thì trạng thái API xanh không
-phải là bằng chứng nó đúng.
+### Vì sao `all` bỏ qua nhóm loa
 
-## Giọng và tốc độ
+Một nhóm Cast phát *qua* các loa thành viên. Nếu `all` gửi tới cả nhóm lẫn
+từng thành viên, một loa vật lý sẽ nhận hai luồng cùng lúc, nghe như vọng và
+lệch. Nên `all` chỉ gửi tới từng loa riêng lẻ. Muốn dùng nhóm thì gọi đích
+danh tên nhóm.
 
-| Muốn | Nói thêm |
-|---|---|
-| giọng nữ (mặc định) | không cần nói gì |
-| giọng nam | "giọng nam" — `vi-VN-NamMinhNeural` |
-| đọc chậm lại | "chậm hơn" — tương ứng `rate="-20%"` |
-| đọc nhanh lên | "nhanh hơn" — `rate="+10%"` |
+Đáng nói: khi lỗi này còn, cả bốn lời gọi đều trả `playing`. API không phát
+hiện được — chỉ nghe mới biết.
 
-> Giọng nam và tham số tốc độ **chưa được nghe kiểm chứng bằng tai**. Chúng có
-> tổng hợp ra file mp3 khác rỗng (bộ eval `--online` xác nhận), nhưng chưa ai
-> ngồi nghe xem có tự nhiên không.
+### Vì sao bỏ `target` lại không phát gì
+
+Phát tiếng ra loa là một tác dụng phụ vật lý trong nhà người khác. Mặc định
+phát ra tất cả loa vì người dùng quên nói rõ là một mặc định tồi. Nên server
+trả về:
+
+```json
+{"status": "needs_speaker_selection",
+ "speakers": [...],
+ "message": "No target given. Ask the user which speaker ... Available: ..."}
+```
+
+LLM đọc cái đó rồi hỏi lại bạn. Không có âm thanh nào được tổng hợp, không có
+lệnh nào gửi đi.
 
 ## Các tool khác
 
-Ngoài `say` còn 12 tool nữa: `discover_devices`, `list_speakers`,
-`list_devices`, `get_status`, `play_media`, `play`, `pause`, `stop`, `seek`,
-`set_volume`, `set_muted`, `quit_app`. Mô tả đầy đủ ở mục **Tools** trong
-`README.md` gốc repo.
-
-Vài câu hay dùng:
-
-> Có những loa nào trong nhà? → `list_speakers`
-> Dò lại thiết bị đi → `discover_devices`
-> Loa bếp đang phát gì? → `get_status`
-> Tắt loa phòng ngủ đi → `stop`
-> Vặn loa bếp xuống 30% → `set_volume`
-
-## Khi trục trặc
-
-| Triệu chứng | Nghĩ tới điều này trước |
+| Tool | Dùng khi |
 |---|---|
-| "Không thấy loa nào" | Server có **cùng LAN với loa** không? Dò dùng mDNS, không qua được router. Bảo Claude `discover_devices` một lần. |
-| Một loa cụ thể không phát, các loa khác vẫn ổn | Thiết bị treo. Kiểm `nc -z <ip-loa> 8009`. Refuse thì **khởi động lại cái loa** — không phải lỗi phần mềm. Từng mất 3 lần thử rải 2 ngày mới ra. |
-| Loa nháy sáng rồi tắt, không phát hết câu | Loa không tải được file âm thanh. Kiểm cổng media (8766) có bị tường lửa chặn không. |
-| Claude nói đã phát mà nhà im lặng | Xem `audio_url` trong kết quả rồi thử `curl` chính URL đó từ một máy khác. Tải được thì lỗi ở loa, không tải được thì lỗi ở mạng/cổng. |
-| Client không kết nối được | Xem bảng mã lỗi trong `technical-docs.md` mục 7. |
-| Đã sửa mà lỗi y hệt như cũ | **Dừng sửa.** Nhiều khả năng tiến trình cũ chưa được nạp lại: `./scripts/service.sh status`, đọc dòng lệnh thật in ra từ `/proc`. |
+| `discover_devices` | Quét lại LAN. Chạy khi có loa mới, hoặc loa đổi IP |
+| `list_speakers` | Xem các loa đã biết (không quét lại). Bỏ thiết bị hình ảnh |
+| `list_devices` | Mọi thiết bị Cast, kể cả Chromecast/Nest Hub |
+| `get_status` | Loa đang phát gì, âm lượng bao nhiêu |
+| `play_media` | Cast một URL bất kỳ (nhạc, video) — loa tự đi tải URL đó |
+| `play` / `pause` / `stop` / `seek` | Điều khiển nội dung đang phát |
+| `set_volume` / `set_muted` | Âm lượng 0.0–1.0; tự kẹp vào khoảng hợp lệ |
+| `quit_app` | Trả thiết bị về màn hình chờ |
 
-Phần troubleshooting đầy đủ hơn: mục **Troubleshooting** trong `README.md` gốc
-repo.
+## Cắm vào client
 
-## Nên biết trước khi dùng thật
+| Client | Cách |
+|---|---|
+| Claude Code, cùng máy | `claude mcp add --scope user googlecast -- uv run --directory <repo> googlecast-mcp` |
+| Claude Desktop, máy khác | Ô connector chỉ nhận https. Bắc cầu bằng `npx -y mcp-remote http://<ip>:8765/mcp --allow-http` trong `claude_desktop_config.json` |
+| Claude Desktop qua tên miền | Dựng nginx + TLS, rồi `--allow-host <domain>` |
+| Client trình duyệt (llama-server webui) | Cần `--cors-origin <origin khớp chính xác thanh địa chỉ>` |
 
-- **Ai tới được endpoint là điều khiển được loa nhà bạn.** Không có xác thực ở
-  tầng ứng dụng. Nếu đã mở ra tên miền công khai thì hãy chặn IP ở nginx.
-- Thư mục cache âm thanh chỉ tăng dần, chưa tự dọn. Thỉnh thoảng xoá tay.
-- Thông báo chen ngang sẽ **không** khôi phục lại nhạc đang nghe dở.
+Chi tiết và lý do: `technical-docs.md`.
+
+## Lỗi thường gặp
+
+**"Nó bảo playing mà không nghe thấy gì"**
+Kiểm âm lượng loa trước. Rồi kiểm thiết bị có treo không: `nc -z <ip> 8009`.
+mDNS và ping vẫn trả lời trong khi cổng 8009 đã từ chối — restart thiết bị là
+hết. Đã gặp thật trên Nest Hub, và mất ba lần thử mới nhận ra.
+
+**"Đèn loa nháy rồi tắt, không phát hết câu"**
+Thường là loa không tải được file âm thanh: cổng 8766 bị tường lửa chặn, hoặc
+máy chạy server không cùng LAN với loa.
+
+**`DeviceNotFoundError` với một loa chắc chắn đang có**
+mDNS lossy, một lần quét có thể sót. Server đã tự thử kết nối thẳng tới địa
+chỉ đã lưu trước khi quét lại. Nếu loa đổi IP thì chạy `discover_devices`.
+
+**Mở `http://<ip>:8765/mcp` bằng trình duyệt thì ra `406`**
+Đúng như thế. Endpoint MCP không phải trang web.
+
+**"Đã sửa rồi mà vẫn lỗi y hệt"**
+Dừng sửa. Kiểm bản sửa đã được nạp chưa: `./scripts/service.sh status` in
+dòng lệnh của tiến trình đang chạy thật. `systemctl enable --now` **không**
+khởi động lại service đang chạy — tiến trình cũ từng sống ba ngày như thế.
+
+**Máy tính không cùng LAN với loa**
+Không có cách vòng. mDNS không đi qua router, và loa phải với tới được máy này
+để tải file.
+
+## Riêng tư
+
+Text được gửi tới dịch vụ giọng nói của Microsoft Edge để tổng hợp. File mp3
+lưu trong thư mục cache trên máy chạy server và phục vụ **không xác thực** ở
+cổng 8766 cho mọi máy trong LAN. Đừng cho nó đọc điều gì bí mật.

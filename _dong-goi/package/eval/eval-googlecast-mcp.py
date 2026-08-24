@@ -1,83 +1,110 @@
 #!/usr/bin/env python3
-"""Evaluation harness for googlecast-mcp.
+"""Eval harness for googlecast-mcp.
 
-Three tiers, chosen so the default one is safe to run anywhere:
+Three tiers, chosen by flag:
 
-    (default)     offline  — no network, no sound, no real device touched
-    --online      adds checks that need internet (edge-tts synthesis)
-    --hardware    adds checks that cast to REAL speakers and make REAL sound
-
-A test nobody dares run is worth nothing, so everything that can be checked
-without a side effect is checked in the default tier. Casting is opt-in.
-
-Run:
     uv run python _dong-goi/package/eval/eval-googlecast-mcp.py
-    uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --online
-    uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --hardware --speaker "Kitchen speaker"
+        offline only. No network, no internet, no sound. Safe anywhere.
 
-Exit code 0 when every selected check passes, 1 otherwise.
+    ... --online
+        offline + real edge-tts synthesis (needs internet, still silent).
+
+    ... --hardware
+        offline + online + a real cast to a real speaker. MAKES NOISE.
+        Never run this without asking the person who owns the speakers.
+
+Design rule that this file exists to obey (learned the hard way, twice):
+a mock must never leak past the tier that created it.
+
+  * Every patch goes through ``patched()``, which restores in ``finally``.
+  * ``assert_pristine()`` runs after every tier and fails loudly if any
+    module attribute is still a stand-in.
+  * The online and hardware tiers do not reuse the shared module singletons
+    at all. They build a fresh CastManager / MediaServer of their own, so a
+    leak upstream cannot silently make them measure a fake.
+
+Exit code 0 = every check passed.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
+import contextlib
+import json
+import socket
 import sys
 import tempfile
 from pathlib import Path
 
-# Point the device store and the audio cache at throwaway directories BEFORE
-# importing the server: importing it constructs the store and the cache dir,
-# and an eval run must never read or rewrite the real ~/.googlecast-mcp file.
-_SANDBOX = Path(tempfile.mkdtemp(prefix="googlecast-mcp-eval-"))
-os.environ["GOOGLECAST_MCP_STORE"] = str(_SANDBOX / "speakers.json")
-os.environ["GOOGLECAST_MCP_CACHE"] = str(_SANDBOX / "cache")
+REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
+PASSED = 0
+FAILED: list[str] = []
+CURRENT_TIER = "offline"
 
 
-# --------------------------------------------------------------------------
-# Tiny test runner: no pytest dependency, so the harness runs from a bare
-# checkout the moment `uv sync` has finished.
-# --------------------------------------------------------------------------
-
-PASSED: list[str] = []
-FAILED: list[tuple[str, str]] = []
-
-
-def check(name: str, condition: bool, detail: str = "") -> None:
-    if condition:
-        PASSED.append(name)
-        print(f"  PASS  {name}")
+def check(condition: object, name: str) -> bool:
+    """Record one assertion. Returns the boolean so callers can branch."""
+    global PASSED
+    ok = bool(condition)
+    if ok:
+        PASSED += 1
+        print(f"  ok   [{CURRENT_TIER}] {name}")
     else:
-        FAILED.append((name, detail))
-        print(f"  FAIL  {name}" + (f"  — {detail}" if detail else ""))
+        FAILED.append(f"[{CURRENT_TIER}] {name}")
+        print(f"  FAIL [{CURRENT_TIER}] {name}")
+    return ok
 
 
 def section(title: str) -> None:
-    print(f"\n[{title}]")
+    print(f"\n-- {title}")
+
+
+@contextlib.contextmanager
+def patched(obj: object, attr: str, value: object):
+    """Temporarily replace ``obj.attr``, restoring even if the body raises."""
+    sentinel = object()
+    original = getattr(obj, attr, sentinel)
+    setattr(obj, attr, value)
+    try:
+        yield value
+    finally:
+        if original is sentinel:
+            delattr(obj, attr)
+        else:
+            setattr(obj, attr, original)
+
+
+class Tripwire:
+    """Callable that fails the run if it is ever called.
+
+    Used to prove a code path did NOT happen (no TTS, no cast) rather than
+    merely that the return value looked right.
+    """
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self.called = False
+
+    def __call__(self, *args: object, **kwargs: object):
+        self.called = True
+        raise AssertionError(f"{self.label} must not be called here")
 
 
 # --------------------------------------------------------------------------
-# Fixtures — a speaker layout that reproduces the real house, including the
-# case that caused the original bug: a group and one of its members are the
-# SAME physical speaker, so they share a host address.
+# fixtures
 # --------------------------------------------------------------------------
 
-FIXTURE_SPEAKERS = [
-    {
-        "friendly_name": "Family speaker group",
-        "uuid": "00000000-0000-0000-0000-0000000000g1",
-        "model_name": "Google Cast Group",
-        "manufacturer": "Google Inc.",
-        "host": "192.168.1.22",
-        "port": 32000,
-        "cast_type": "group",
-    },
+# Two entries share host 192.168.1.22 on purpose: "Family speaker group" is a
+# Cast group whose only member is "Kitchen speaker". Filtering by NAME looks
+# correct here and is a fake test; the real property is that no physical HOST
+# appears twice in the fan-out set.
+FIXTURE_DEVICES = [
     {
         "friendly_name": "Kitchen speaker",
-        "uuid": "00000000-0000-0000-0000-000000000001",
+        "uuid": "11111111-1111-1111-1111-111111111111",
         "model_name": "Google Nest Mini",
         "manufacturer": "Google Inc.",
         "host": "192.168.1.22",
@@ -85,8 +112,8 @@ FIXTURE_SPEAKERS = [
         "cast_type": "audio",
     },
     {
-        "friendly_name": "Bedroom speaker",
-        "uuid": "00000000-0000-0000-0000-000000000002",
+        "friendly_name": "Office speaker",
+        "uuid": "22222222-2222-2222-2222-222222222222",
         "model_name": "Google Nest Mini",
         "manufacturer": "Google Inc.",
         "host": "192.168.1.23",
@@ -94,434 +121,482 @@ FIXTURE_SPEAKERS = [
         "cast_type": "audio",
     },
     {
-        "friendly_name": "Office speaker",
-        "uuid": "00000000-0000-0000-0000-000000000003",
-        "model_name": "Google Home",
+        "friendly_name": "Family speaker group",
+        "uuid": "33333333-3333-3333-3333-333333333333",
+        "model_name": "Google Cast Group",
+        "manufacturer": "Google Inc.",
+        "host": "192.168.1.22",
+        "port": 32123,
+        "cast_type": "group",
+    },
+    {
+        "friendly_name": "Working display",
+        "uuid": "44444444-4444-4444-4444-444444444444",
+        "model_name": "Google Nest Hub",
         "manufacturer": "Google Inc.",
         "host": "192.168.1.24",
         "port": 8009,
-        "cast_type": "audio",
+        "cast_type": "cast",  # video device: must never be treated as a speaker
     },
 ]
 
-FIXTURE_VIDEO = {
-    "friendly_name": "Working display",
-    "uuid": "00000000-0000-0000-0000-0000000000v1",
-    "model_name": "Google Nest Hub",
-    "manufacturer": "Google Inc.",
-    "host": "192.168.1.25",
-    "port": 8009,
-    "cast_type": "cast",
-}
-
-HOST_BY_NAME = {d["friendly_name"]: d["host"] for d in FIXTURE_SPEAKERS}
+HOST_BY_NAME = {d["friendly_name"]: d["host"] for d in FIXTURE_DEVICES}
 
 
-class FakeCast:
-    """Records every cast attempt instead of talking to a device."""
+class FakeManager:
+    """Stand-in CastManager that records casts instead of performing them."""
 
-    def __init__(self, broken: set[str] | None = None) -> None:
-        self.calls: list[tuple[str, str]] = []  # (speaker name, url)
-        self.broken = broken or set()
+    def __init__(self, devices: list[dict], failing: set[str] | None = None) -> None:
+        self._devices = devices
+        self._failing = failing or set()
+        self.casts: list[tuple[str, str]] = []
+
+    def list_cached(self) -> list[dict]:
+        return list(self._devices)
+
+    def list_speakers(self) -> list[dict]:
+        return [d for d in self._devices if d["cast_type"] in ("audio", "group")]
+
+    def discover(self, timeout: float = 5.0) -> list[dict]:
+        return list(self._devices)
 
     def play_media(self, name, url, content_type=None, title=None):
-        if name in self.broken:
-            raise RuntimeError(f"Device {name!r} did not respond.")
-        self.calls.append((name, url))
+        if name in self._failing:
+            raise RuntimeError(f"{name} did not respond")
+        self.casts.append((name, url))
         return {"device": {"friendly_name": name}}
 
-    @property
-    def names(self) -> list[str]:
-        return [name for name, _ in self.calls]
 
+class FakeMediaServer:
+    """Stand-in MediaServer: builds a URL, binds nothing."""
 
-# The offline tier replaces tts.synthesize on the MODULE object, which every
-# other importer of it shares. Keep the real one so the online tier measures
-# real synthesis instead of silently re-measuring the fake.
-_REAL_SYNTHESIZE = None
+    def __init__(self) -> None:
+        self.requests: list[Path] = []
 
+    def url_for(self, path: Path) -> str:
+        self.requests.append(path)
+        return f"http://192.168.1.128:8766/{path.name}"
 
-def install_fakes(monkey_targets, cast: FakeCast, tts_calls: list) -> None:
-    """Redirect the server's speaker list, casting, and TTS to fakes."""
-    global _REAL_SYNTHESIZE
-    server = monkey_targets
-    if _REAL_SYNTHESIZE is None:
-        _REAL_SYNTHESIZE = server.tts.synthesize
-
-    server._manager.list_speakers = lambda: list(FIXTURE_SPEAKERS)
-    server._manager.list_cached = lambda: [*FIXTURE_SPEAKERS, FIXTURE_VIDEO]
-    server._manager.play_media = cast.play_media
-    server._media_server.url_for = lambda path: "http://192.168.1.128:8766/fake.mp3"
-
-    async def fake_synthesize(text, voice=None, rate="+0%", **kwargs):
-        if not text or not text.strip():
-            raise ValueError("text must not be empty")
-        tts_calls.append((text, voice, rate))
-        return Path("/dev/null")
-
-    server.tts.synthesize = fake_synthesize
+    def stop(self) -> None:
+        pass
 
 
 # --------------------------------------------------------------------------
-# Offline tier
+# hygiene guard
 # --------------------------------------------------------------------------
 
+_PRISTINE: dict[str, object] = {}
 
-async def run_offline() -> None:
-    section("import and tool surface")
 
-    import googlecast_mcp
-    from googlecast_mcp import server as srv
-    from googlecast_mcp import tts as tts_mod
-    from googlecast_mcp.__main__ import _transport_security
+def snapshot_pristine() -> None:
+    """Remember the genuine module attributes before any tier runs."""
+    from googlecast_mcp import server, tts
+    from googlecast_mcp.cast_manager import CastManager
+    from googlecast_mcp.media_server import MediaServer
+
+    _PRISTINE["tts.synthesize"] = tts.synthesize
+    _PRISTINE["server.tts"] = server.tts
+    _PRISTINE["manager_type"] = CastManager
+    _PRISTINE["media_type"] = MediaServer
+
+
+def assert_pristine(where: str) -> None:
+    """Fail if a mock outlived the tier that installed it."""
+    from googlecast_mcp import server, tts
+    from googlecast_mcp.cast_manager import CastManager
+    from googlecast_mcp.media_server import MediaServer
+
+    check(tts.synthesize is _PRISTINE["tts.synthesize"], f"{where}: tts.synthesize restored")
+    check(server.tts is _PRISTINE["server.tts"], f"{where}: server.tts module restored")
+    check(
+        type(server._manager) is _PRISTINE["manager_type"],
+        f"{where}: server._manager is a real CastManager",
+    )
+    check(
+        type(server._media_server) is _PRISTINE["media_type"],
+        f"{where}: server._media_server is a real MediaServer",
+    )
+
+
+# --------------------------------------------------------------------------
+# offline tier
+# --------------------------------------------------------------------------
+
+EXPECTED_TOOLS = {
+    "say",
+    "discover_devices",
+    "list_speakers",
+    "list_devices",
+    "get_status",
+    "play_media",
+    "play",
+    "pause",
+    "stop",
+    "seek",
+    "set_volume",
+    "set_muted",
+    "quit_app",
+}
+
+
+async def tier_offline() -> None:
+    global CURRENT_TIER
+    CURRENT_TIER = "offline"
+
+    section("imports and tool surface")
+    from googlecast_mcp import server, tts
     from googlecast_mcp.cast_manager import _guess_content_type
     from googlecast_mcp.speaker_store import SpeakerStore, is_speaker
 
-    check("package imports", googlecast_mcp is not None)
+    tools = await server.mcp.list_tools()
+    names = {t.name for t in tools}
+    check(names == EXPECTED_TOOLS, f"exactly the 13 expected tools are registered ({len(names)})")
+    check(all(t.description for t in tools), "every tool carries a description for the LLM")
 
-    tools = await srv.mcp.list_tools()
-    tool_names = sorted(t.name for t in tools)
-    expected_tools = sorted(
-        [
-            "say",
-            "discover_devices",
-            "list_speakers",
-            "list_devices",
-            "get_status",
-            "play_media",
-            "play",
-            "pause",
-            "stop",
-            "seek",
-            "set_volume",
-            "set_muted",
-            "quit_app",
-        ]
+    say_tool = next(t for t in tools if t.name == "say")
+    say_props = say_tool.inputSchema.get("properties", {})
+    check("text" in say_props, "say exposes a text parameter")
+    check(
+        "target" not in say_tool.inputSchema.get("required", []),
+        "say does not require a speaker up front (so it can ask instead)",
     )
-    check("13 tools registered", len(tools) == 13, f"got {len(tools)}")
-    check("tool names match the documented set", tool_names == expected_tools,
-          f"got {tool_names}")
-    check("every tool carries a description",
-          all((t.description or "").strip() for t in tools))
 
-    # -- content type guessing -------------------------------------------
+    section("device classification")
+    check(is_speaker(FIXTURE_DEVICES[0]), "audio device counts as a speaker")
+    check(is_speaker(FIXTURE_DEVICES[2]), "speaker group counts as a speaker")
+    check(not is_speaker(FIXTURE_DEVICES[3]), "video Nest Hub is not a speaker")
+    check(not is_speaker({}), "device with no cast_type is not a speaker")
+
     section("content type guessing")
-    check("mp3 is audio/mpeg", _guess_content_type("http://h/a.mp3") == "audio/mpeg")
-    check("query string is ignored",
-          _guess_content_type("http://h/a.mp3?x=1") == "audio/mpeg")
-    check("uppercase extension still matches",
-          _guess_content_type("http://h/A.MP3") == "audio/mpeg")
-    check("mp4 is video/mp4", _guess_content_type("http://h/a.mp4") == "video/mp4")
-    check("hls is x-mpegURL",
-          _guess_content_type("http://h/a.m3u8") == "application/x-mpegURL")
-    check("unknown extension falls back to video/mp4",
-          _guess_content_type("http://h/a.zzz") == "video/mp4")
+    check(_guess_content_type("http://h/a.mp3") == "audio/mpeg", "mp3 -> audio/mpeg")
+    check(_guess_content_type("http://h/a.MP3?x=1") == "audio/mpeg", "uppercase + query string")
+    check(_guess_content_type("http://h/a.m3u8") == "application/x-mpegURL", "hls playlist")
+    check(_guess_content_type("http://h/a.png") == "image/png", "png -> image/png")
+    check(_guess_content_type("http://h/unknown") == "video/mp4", "unknown extension falls back")
 
-    # -- speaker classification ------------------------------------------
-    section("speaker classification")
-    check("audio device is a speaker", is_speaker({"cast_type": "audio"}))
-    check("speaker group is a speaker", is_speaker({"cast_type": "group"}))
-    check("video cast is NOT a speaker", not is_speaker({"cast_type": "cast"}))
-    check("missing cast_type is NOT a speaker", not is_speaker({}))
-
-    # -- voices -----------------------------------------------------------
     section("voice resolution")
-    check("default voice is the female Vietnamese one",
-          tts_mod.resolve_voice(None) == "vi-VN-HoaiMyNeural")
-    check("'female' maps to HoaiMy",
-          tts_mod.resolve_voice("female") == "vi-VN-HoaiMyNeural")
-    check("'male' maps to NamMinh",
-          tts_mod.resolve_voice("male") == "vi-VN-NamMinhNeural")
-    check("case and spaces are tolerated",
-          tts_mod.resolve_voice("  Male ") == "vi-VN-NamMinhNeural")
-    check("a full voice id passes through",
-          tts_mod.resolve_voice("en-US-AriaNeural") == "en-US-AriaNeural")
+    check(tts.resolve_voice("female") == "vi-VN-HoaiMyNeural", "female -> HoaiMy")
+    check(tts.resolve_voice("MALE") == "vi-VN-NamMinhNeural", "male is case-insensitive")
+    check(tts.resolve_voice(None) == tts.DEFAULT_VOICE, "no voice -> default")
+    check(tts.resolve_voice("en-US-AriaNeural") == "en-US-AriaNeural", "full voice id passes through")
 
-    # -- transport security ----------------------------------------------
-    # These two properties are exactly what cost days of 421 debugging.
+    section("empty text is refused before any network call")
+    tripwire = Tripwire("edge_tts.Communicate")
+    import edge_tts
+
+    with patched(edge_tts, "Communicate", tripwire):
+        err: Exception | None = None
+        try:
+            await tts.synthesize("   ")
+        except Exception as exc:  # catch broadly so a wrong error type reads as red
+            err = exc
+        check(isinstance(err, ValueError), f"blank text raises ValueError (got {err!r})")
+        check(not tripwire.called, "blank text never reaches the TTS backend")
+
+    section("speaker store round trip")
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SpeakerStore(Path(tmp) / "speakers.json")
+        check(store.load() == [], "missing store file reads as empty, not an error")
+        store.save(FIXTURE_DEVICES[:2])
+        store.save([FIXTURE_DEVICES[2]])
+        saved = {d["friendly_name"] for d in store.load()}
+        check(saved == {"Kitchen speaker", "Office speaker", "Family speaker group"},
+              "save merges instead of replacing (a lossy mDNS scan must not delete)")
+        check({d["friendly_name"] for d in store.speakers()} == saved,
+              "speakers() filters to speakers only")
+        (Path(tmp) / "speakers.json").write_text("{ not json", encoding="utf-8")
+        check(store.load() == [], "corrupt store file degrades to empty, not a crash")
+
+    section("say with no speaker chosen: asks, plays nothing")
+    fake_mgr = FakeManager(FIXTURE_DEVICES)
+    tts_tripwire = Tripwire("tts.synthesize")
+    with patched(server, "_manager", fake_mgr), \
+         patched(server, "_media_server", FakeMediaServer()), \
+         patched(server.tts, "synthesize", tts_tripwire):
+        result = await server.say("Cơm đã chín rồi")
+        check(result["status"] == "needs_speaker_selection", "status asks for a speaker")
+        check(not fake_mgr.casts, "nothing was cast")
+        check(not tts_tripwire.called, "no audio was synthesized")
+        listed = {s["friendly_name"] for s in result["speakers"]}
+        check(listed == {"Kitchen speaker", "Office speaker", "Family speaker group"},
+              "the speaker list handed back excludes video devices")
+        check("all" in result["message"], "the message tells the LLM that 'all' is an option")
+
+    with patched(server, "_manager", FakeManager([])), \
+         patched(server, "_media_server", FakeMediaServer()), \
+         patched(server.tts, "synthesize", Tripwire("tts.synthesize")):
+        empty = await server.say("xin chào")
+        check(empty["status"] == "no_speakers_found", "empty network gets its own status")
+
+    section("target selection")
+
+    async def select(value):
+        fake = FakeManager(FIXTURE_DEVICES)
+        with patched(server, "_manager", fake):
+            names_, prompt = await server._select_targets(value)
+        return names_, prompt
+
+    chosen, prompt = await select("all")
+    check(prompt is None, "'all' resolves without asking")
+    check("Family speaker group" not in chosen, "'all' excludes the Cast group")
+    check("Working display" not in chosen, "'all' excludes video devices")
+    # Not "no duplicates" — that stays green when 'all' wrongly resolves to a
+    # single entry. The property is exact coverage: one cast per distinct
+    # physical speaker host, no more and no fewer.
+    speaker_hosts = sorted({d["host"] for d in FIXTURE_DEVICES if is_speaker(d)})
+    hosts = sorted(HOST_BY_NAME[n] for n in chosen)
+    check(hosts == speaker_hosts,
+          f"'all' hits each physical host exactly once ({hosts} vs {speaker_hosts})")
+    check(set(chosen) == {"Kitchen speaker", "Office speaker"}, "'all' = the two real speakers")
+
+    viet, _ = await select("tất cả")
+    check(set(viet) == set(chosen), "Vietnamese 'tất cả' behaves like 'all'")
+
+    grp, _ = await select("Family speaker group")
+    check(grp == ["Family speaker group"], "a group named explicitly is still allowed")
+
+    multi, _ = await select("Kitchen speaker, Office speaker")
+    check(multi == ["Kitchen speaker", "Office speaker"], "comma-separated list is split")
+
+    spaced, _ = await select("  Kitchen speaker ,, Office speaker  ")
+    check(spaced == ["Kitchen speaker", "Office speaker"], "stray spaces and empty items dropped")
+
+    blank, blank_prompt = await select("   ")
+    check(blank == [] and blank_prompt is not None, "whitespace-only target is treated as absent")
+
+    section("say fan-out and failure isolation")
+
+    async def fake_synth(text, voice=None, rate="+0%", **kw):
+        path = Path(tempfile.gettempdir()) / "googlecast-eval-fake.mp3"
+        path.write_bytes(b"\x00")
+        return path
+
+    fake_mgr = FakeManager(FIXTURE_DEVICES)
+    media = FakeMediaServer()
+    with patched(server, "_manager", fake_mgr), \
+         patched(server, "_media_server", media), \
+         patched(server.tts, "synthesize", fake_synth):
+        res = await server.say("Cơm đã chín rồi", target="all")
+        check(res["status"] == "ok", "casting to all reports ok")
+        check(len(fake_mgr.casts) == 2, "exactly two casts were issued")
+        cast_hosts = sorted(HOST_BY_NAME[n] for n, _ in fake_mgr.casts)
+        check(cast_hosts == speaker_hosts,
+              f"each physical speaker received exactly one stream ({cast_hosts})")
+        check(len({u for _, u in fake_mgr.casts}) == 1, "every speaker got the same audio URL")
+        check(res["voice"] == "vi-VN-HoaiMyNeural", "the resolved voice is reported back")
+
+    broken = FakeManager(FIXTURE_DEVICES, failing={"Office speaker"})
+    with patched(server, "_manager", broken), \
+         patched(server, "_media_server", FakeMediaServer()), \
+         patched(server.tts, "synthesize", fake_synth):
+        res = await server.say("xin chào", target="Kitchen speaker, Office speaker")
+        by_name = {r["speaker"]: r for r in res["results"]}
+        check(by_name["Kitchen speaker"]["status"] == "playing", "healthy speaker still plays")
+        check(by_name["Office speaker"]["status"] == "error", "broken speaker reports its own error")
+        check(res["status"] == "ok", "one dead speaker does not fail the whole call")
+
+    all_broken = FakeManager(FIXTURE_DEVICES, failing={"Kitchen speaker"})
+    with patched(server, "_manager", all_broken), \
+         patched(server, "_media_server", FakeMediaServer()), \
+         patched(server.tts, "synthesize", fake_synth):
+        res = await server.say("xin chào", target="Kitchen speaker")
+        check(res["status"] == "failed", "every speaker failing reports failed, not ok")
+
     section("transport security allowlist")
-    sec = _transport_security("0.0.0.0", ["google-cast.adrec.cloud"],
-                              ["http://192.168.1.99:8383"])
-    hosts = list(sec.allowed_hosts)
-    origins = list(sec.allowed_origins)
-    check("the extra --allow-host domain is trusted",
-          "google-cast.adrec.cloud" in hosts, f"hosts={hosts}")
-    check("bare host with NO :port is allowed (proxy on 443 sends no port)",
-          "google-cast.adrec.cloud" in hosts)
-    check("host with wildcard port is allowed",
-          "google-cast.adrec.cloud:*" in hosts)
-    check("https origin is allowed (TLS terminated by the proxy)",
-          "https://google-cast.adrec.cloud" in origins, f"origins={origins}")
-    check("https origin with wildcard port is allowed",
-          "https://google-cast.adrec.cloud:*" in origins)
-    check("loopback stays allowed", "127.0.0.1" in hosts)
-    check("the wildcard bind address is NOT itself an allowed host",
-          "0.0.0.0" not in hosts, f"hosts={hosts}")
-    check("an explicit browser origin is carried through",
-          "http://192.168.1.99:8383" in origins)
+    from googlecast_mcp.__main__ import _transport_security
 
-    sec_bind = _transport_security("192.168.1.128", [], [])
-    check("an explicit bind host is trusted",
-          "192.168.1.128" in list(sec_bind.allowed_hosts))
+    settings = _transport_security(
+        "0.0.0.0",
+        ["google-cast.adrec.cloud"],
+        ["http://192.168.1.99:8383"],
+    )
+    hosts_allowed = list(settings.allowed_hosts or [])
+    origins_allowed = list(settings.allowed_origins or [])
+    check("google-cast.adrec.cloud" in hosts_allowed,
+          "bare host with no :port is allowed (a proxy on 443 sends no port)")
+    check("google-cast.adrec.cloud:*" in hosts_allowed, "host with any port is allowed")
+    check("0.0.0.0" not in hosts_allowed, "the wildcard bind address is not itself an allowed host")
+    check("127.0.0.1" in hosts_allowed, "loopback stays allowed")
+    check("https://google-cast.adrec.cloud" in origins_allowed,
+          "https origin is allowed (TLS terminates at the reverse proxy)")
+    check("http://google-cast.adrec.cloud" in origins_allowed, "http origin is allowed too")
+    check("http://192.168.1.99:8383" in origins_allowed,
+          "an explicit --cors-origin is carried into the allowlist")
+    check(len(origins_allowed) == len(set(origins_allowed)), "no duplicate origins")
 
-    # -- store round trip -------------------------------------------------
-    section("device store")
-    store = SpeakerStore(_SANDBOX / "store-test.json")
-    check("an empty store loads as an empty list", store.load() == [])
-    store.save([*FIXTURE_SPEAKERS, FIXTURE_VIDEO])
-    check("saved devices come back", len(store.load()) == 5)
-    store.save([{**FIXTURE_SPEAKERS[1], "host": "192.168.1.99"}])
-    reloaded = {d["uuid"]: d for d in store.load()}
-    check("a re-save merges by uuid instead of duplicating", len(reloaded) == 5)
-    check("a merged device keeps the newest address",
-          reloaded[FIXTURE_SPEAKERS[1]["uuid"]]["host"] == "192.168.1.99")
-    check("the store filters speakers from video casts",
-          len(store.speakers()) == 4)
+    named = _transport_security("192.168.1.128", [], None)
+    check("192.168.1.128" in (named.allowed_hosts or []), "an explicit bind host is allowed")
 
-    # -- say(): target selection -----------------------------------------
-    section("say(): no target means no sound")
-    cast = FakeCast()
-    tts_calls: list = []
-    install_fakes(srv, cast, tts_calls)
+    section("media URL construction")
+    from googlecast_mcp.media_server import MediaServer, lan_ip
 
-    result = await srv.say(text="Cơm đã chín rồi")
-    check("omitting the speaker returns needs_speaker_selection",
-          result.get("status") == "needs_speaker_selection", str(result)[:120])
-    check("omitting the speaker casts to NOTHING", cast.calls == [])
-    check("omitting the speaker does NOT synthesize audio", tts_calls == [])
-    check("the prompt lists the speakers for the model to ask about",
-          len(result.get("speakers", [])) == 4)
-    check("the prompt names the speakers in its message",
-          "Kitchen speaker" in result.get("message", ""))
-
-    section("say(): 'all'")
-    cast = FakeCast()
-    tts_calls = []
-    install_fakes(srv, cast, tts_calls)
-    result = await srv.say(text="Xin chào", target="all")
-    names = cast.names
-    check("'all' reaches at least one speaker", len(names) > 0)
-    check("'all' excludes speaker groups",
-          "Family speaker group" not in names, f"cast to {names}")
-    # The false-green lesson: comparing NAMES cannot see this bug, because a
-    # group and its member have different names. Compare PHYSICAL devices.
-    hosts_hit = [HOST_BY_NAME[n] for n in names if n in HOST_BY_NAME]
-    check("'all' hits no physical device twice (compared by host, not name)",
-          len(hosts_hit) == len(set(hosts_hit)),
-          f"hosts={hosts_hit} from {names}")
-    check("'all' still reaches every individual speaker",
-          set(names) == {"Kitchen speaker", "Bedroom speaker", "Office speaker"},
-          f"got {names}")
-    check("'all' synthesizes the audio exactly once", len(tts_calls) == 1)
-    check("every speaker gets the same audio url",
-          len({url for _, url in cast.calls}) == 1)
-    check("'all' reports ok", result.get("status") == "ok")
-
-    section("say(): Vietnamese and alias keywords for 'all'")
-    for keyword in ("tất cả", "tat ca", "everyone", "*", "ALL"):
-        cast = FakeCast()
-        install_fakes(srv, cast, [])
-        await srv.say(text="Xin chào", target=keyword)
-        check(f"{keyword!r} means every speaker, groups excluded",
-              set(cast.names) == {"Kitchen speaker", "Bedroom speaker",
-                                  "Office speaker"},
-              f"got {cast.names}")
-
-    section("say(): explicit targets")
-    cast = FakeCast()
-    install_fakes(srv, cast, [])
-    await srv.say(text="Xin chào", target="Family speaker group")
-    check("a group named explicitly IS still cast to",
-          cast.names == ["Family speaker group"], f"got {cast.names}")
-
-    cast = FakeCast()
-    install_fakes(srv, cast, [])
-    await srv.say(text="Xin chào",
-                     target="Kitchen speaker, Bedroom speaker")
-    check("a comma-separated list reaches both speakers",
-          cast.names == ["Kitchen speaker", "Bedroom speaker"], f"got {cast.names}")
-
-    cast = FakeCast()
-    install_fakes(srv, cast, [])
-    await srv.say(text="Xin chào",
-                     target=" Kitchen speaker ,, Bedroom speaker ")
-    check("stray spaces and empty list items are dropped",
-          cast.names == ["Kitchen speaker", "Bedroom speaker"], f"got {cast.names}")
-
-    section("say(): one broken speaker must not sink the rest")
-    cast = FakeCast(broken={"Ghost speaker"})
-    install_fakes(srv, cast, [])
-    result = await srv.say(text="Xin chào",
-                              target="Kitchen speaker, Ghost speaker")
-    by_speaker = {r["speaker"]: r for r in result["results"]}
-    check("the working speaker still plays",
-          by_speaker["Kitchen speaker"]["status"] == "playing")
-    check("the broken speaker is reported as an error",
-          by_speaker["Ghost speaker"]["status"] == "error")
-    check("the broken speaker carries its reason",
-          "error" in by_speaker["Ghost speaker"])
-    check("the call still reports ok when at least one speaker played",
-          result["status"] == "ok")
-
-    cast = FakeCast(broken={"Kitchen speaker"})
-    install_fakes(srv, cast, [])
-    result = await srv.say(text="Xin chào", target="Kitchen speaker")
-    check("the call reports failed when nothing played",
-          result["status"] == "failed", str(result)[:120])
-
-    section("say(): empty text")
-    cast = FakeCast()
-    install_fakes(srv, cast, [])
-    raised = False
-    try:
-        await srv.say(text="   ", target="Kitchen speaker")
-    except ValueError:
-        raised = True
-    check("blank text raises ValueError", raised)
-    check("blank text casts nothing", cast.calls == [])
-
-    section("say(): no speaker exists at all")
-    srv._manager.list_speakers = lambda: []
-    srv._manager.discover = lambda timeout=5.0: []
-    cast = FakeCast()
-    srv._manager.play_media = cast.play_media
-    result = await srv.say(text="Xin chào")
-    check("an empty network returns no_speakers_found",
-          result.get("status") == "no_speakers_found", str(result)[:120])
-    check("an empty network casts nothing", cast.calls == [])
+    ip = lan_ip()
+    check(isinstance(ip, str) and ip.count(".") == 3, f"lan_ip returns an IPv4 address ({ip})")
+    with tempfile.TemporaryDirectory() as tmp:
+        ms = MediaServer(Path(tmp), host="192.168.1.128", port=0)
+        f = Path(tmp) / "chào bạn.mp3"
+        f.write_bytes(b"\x00")
+        try:
+            url = ms.url_for(f)
+            check(url.startswith("http://192.168.1.128:"), "URL advertises the LAN host, not the bind host")
+            check("%" in url.rsplit("/", 1)[-1], "non-ASCII filenames are percent-encoded")
+            check(ms.port not in (0, None), "a real port was bound")
+            bound = socket.socket()
+            bound.settimeout(2)
+            reachable = bound.connect_ex(("127.0.0.1", ms.port)) == 0
+            bound.close()
+            check(reachable, "the media server actually accepts connections")
+        finally:
+            ms.stop()
+        check(ms.port == 0, "stop() releases the server")
 
 
 # --------------------------------------------------------------------------
-# Online tier — needs internet, still makes no sound
+# online tier  (internet, still silent)
 # --------------------------------------------------------------------------
 
+async def tier_online() -> None:
+    """Real edge-tts synthesis. Builds its own objects; shares no mock."""
+    global CURRENT_TIER
+    CURRENT_TIER = "online"
+    section("real text-to-speech")
 
-async def run_online() -> None:
-    section("online: real TTS synthesis (internet, no sound)")
-    import importlib
+    import googlecast_mcp.tts as tts_mod
 
-    tts_mod = importlib.import_module("googlecast_mcp.tts")
-    # Undo the offline tier's module-level fake before measuring anything.
-    if _REAL_SYNTHESIZE is not None:
-        tts_mod.synthesize = _REAL_SYNTHESIZE
-    check("the online tier is testing the real synthesize, not the fake",
-          tts_mod.synthesize.__module__ == "googlecast_mcp.tts",
-          tts_mod.synthesize.__module__)
-    cache = _SANDBOX / "online-cache"
-    cache.mkdir(parents=True, exist_ok=True)
+    # Do NOT reload the module here. Reloading would rebind the attribute to a
+    # brand-new function object, which destroys the only handle we have on the
+    # genuine one and makes the leak check unable to tell real from fake.
+    # Instead, compare against the snapshot taken before any tier ran: this is
+    # the check that would have caught the offline tier leaving a stand-in
+    # behind and this tier silently measuring it.
+    check(tts_mod.synthesize is _PRISTINE["tts.synthesize"],
+          "synthesize under test is the genuine function, not a stand-in")
 
-    path = await tts_mod.synthesize("Cơm đã chín rồi", voice="female",
-                                    cache_dir=cache)
-    check("synthesis writes a file", path.exists())
-    size = path.stat().st_size if path.exists() else 0
-    check("the mp3 is not empty", size > 1000, f"{size} bytes")
-    head = path.read_bytes()[:4]
-    # Either an ID3 tag, or a bare MPEG frame: 11 sync bits set.
-    check("the file really is an mp3",
-          head[:3] == b"ID3" or (head[0] == 0xFF and head[1] & 0xE0 == 0xE0),
-          repr(head))
+    with tempfile.TemporaryDirectory() as tmp:
+        cache = Path(tmp)
+        path = await tts_mod.synthesize("Cơm đã chín rồi", voice="female", cache_dir=cache)
+        size = path.stat().st_size if path.exists() else 0
+        check(path.exists(), "an mp3 file was written")
+        check(size > 1000, f"the mp3 is real audio, not an empty file ({size} bytes)")
+        head = path.read_bytes()[:4]
+        # Either an ID3 tag or a raw MPEG frame sync (0xFF followed by three
+        # set bits). edge-tts emits the latter, and the exact second byte
+        # varies with bitrate, so matching a fixed pair would be brittle.
+        is_mp3 = head[:3] == b"ID3" or (head[0] == 0xFF and head[1] & 0xE0 == 0xE0)
+        check(is_mp3, f"the file looks like mp3 (header {head.hex()})")
 
-    again = await tts_mod.synthesize("Cơm đã chín rồi", voice="female",
-                                     cache_dir=cache)
-    check("a repeat of the same text reuses the cached file", again == path)
+        again = await tts_mod.synthesize("Cơm đã chín rồi", voice="female", cache_dir=cache)
+        check(again == path, "the same text and voice reuse the cached render")
 
-    male = await tts_mod.synthesize("Cơm đã chín rồi", voice="male",
-                                    cache_dir=cache)
-    check("a different voice renders to a different file", male != path)
-    check("the male voice file is not empty", male.stat().st_size > 1000)
+        slower = await tts_mod.synthesize("Cơm đã chín rồi", voice="female", rate="-20%", cache_dir=cache)
+        check(slower != path, "a different rate is cached separately")
+        check(slower.stat().st_size > 1000, "the slower render is real audio too")
 
-    slow = await tts_mod.synthesize("Cơm đã chín rồi", voice="female",
-                                    rate="-20%", cache_dir=cache)
-    check("a different rate renders to a different file", slow != path)
-    check("the slowed file is not empty", slow.stat().st_size > 1000)
-
-    raised = False
-    try:
-        await tts_mod.synthesize("", cache_dir=cache)
-    except ValueError:
-        raised = True
-    check("empty text raises before any network call", raised)
+        male = await tts_mod.synthesize("Xin chào", voice="male", cache_dir=cache)
+        check(male.stat().st_size > 1000, "the male voice synthesizes (not judged by ear here)")
 
 
 # --------------------------------------------------------------------------
-# Hardware tier — REAL SOUND. Opt-in only.
+# hardware tier  (MAKES NOISE)
 # --------------------------------------------------------------------------
 
+async def tier_hardware(speaker: str | None) -> None:
+    """Cast for real. Builds a brand new CastManager and MediaServer.
 
-async def run_hardware(speaker: str) -> None:
-    section(f"hardware: casting real audio to {speaker!r} — THIS MAKES SOUND")
-    import importlib
+    Nothing here touches googlecast_mcp.server's singletons, precisely so a
+    mock installed by an earlier tier cannot make this tier lie in either
+    direction (fake success, or a fake "no speaker answered mDNS").
+    """
+    global CURRENT_TIER
+    CURRENT_TIER = "hardware"
+    section("real discovery and cast")
 
-    srv = importlib.import_module("googlecast_mcp.server")
-    # This tier must see the real network, so drop the sandboxed store.
-    os.environ.pop("GOOGLECAST_MCP_STORE", None)
-    importlib.reload(importlib.import_module("googlecast_mcp.speaker_store"))
-
-    # The offline tier stubbed list_speakers/discover onto the module-level
-    # manager and never put them back, so this tier would "discover" the empty
-    # network that test set up. Build a real manager instead of trusting it.
+    from googlecast_mcp import tts as tts_mod
     from googlecast_mcp.cast_manager import CastManager
+    from googlecast_mcp.media_server import MediaServer
 
-    srv._manager = CastManager()
+    check(tts_mod.synthesize is _PRISTINE["tts.synthesize"], "TTS is un-mocked before casting")
 
-    # Guard: prove this tier measures the real thing, not a leftover stub.
-    check("hardware tier holds a real manager, not an offline stub",
-          type(srv._manager.list_speakers).__name__ == "method",
-          f"list_speakers is {type(srv._manager.list_speakers).__name__}")
+    manager = CastManager()  # fresh instance, not server._manager
+    media = MediaServer(tts_mod.default_cache_dir())
+    try:
+        devices = await asyncio.to_thread(manager.discover, 8.0)
+        check(devices, f"mDNS found devices ({len(devices)})")
+        speakers = await asyncio.to_thread(manager.list_speakers)
+        check(speakers, f"at least one speaker is on the LAN ({len(speakers)})")
+        if not speakers:
+            return
 
-    speakers = await asyncio.to_thread(srv._manager.list_speakers)
-    check("a real speaker is discoverable", len(speakers) > 0,
-          "no speaker answered mDNS")
-    if not speakers:
-        return
+        name = speaker or speakers[0]["friendly_name"]
+        info = next((s for s in speakers if s["friendly_name"] == name), None)
+        check(info is not None, f"requested speaker {name!r} is known")
+        if info is None:
+            return
 
-    result = await srv.say(text="Đây là bài kiểm tra tự động",
-                              target=speaker)
-    check("the real cast reports ok", result.get("status") == "ok", str(result)[:200])
-    played = [r for r in result.get("results", []) if r["status"] == "playing"]
-    check("the chosen speaker is playing", len(played) == 1, str(result)[:200])
+        sock = socket.socket()
+        sock.settimeout(3)
+        open_8009 = sock.connect_ex((info["host"], info["port"])) == 0
+        sock.close()
+        check(open_8009, f"{name} accepts TCP on {info['host']}:{info['port']} (device not hung)")
 
-    await asyncio.sleep(4)
-    status = await asyncio.to_thread(srv._manager.status, speaker)
-    check("the device reports a media state after the announcement",
-          status["media"]["player_state"] is not None, str(status)[:200])
-    srv._media_server.stop()
-    srv._manager.close()
+        audio = await tts_mod.synthesize("Đây là bài kiểm tra tự động", voice="female")
+        check(audio.stat().st_size > 1000, "audio for the real cast is non-empty")
+
+        url = await asyncio.to_thread(media.url_for, audio)
+        status = await asyncio.to_thread(manager.play_media, name, url, "audio/mpeg", "eval")
+        # play_media returns once the receiver app is up, which is earlier than
+        # the moment playback starts — reading the state right here catches the
+        # device still IDLE. Poll for the transition instead of assuming it has
+        # already happened; a short clip can also finish before we look.
+        player = status["media"]["player_state"]
+        for _ in range(10):
+            if player in ("PLAYING", "BUFFERING"):
+                break
+            await asyncio.sleep(1)
+            player = (await asyncio.to_thread(manager.status, name))["media"]["player_state"]
+        check(player in ("PLAYING", "BUFFERING"),
+              f"{name} starts playing (last seen: {player})")
+        await asyncio.sleep(6)
+        after = await asyncio.to_thread(manager.status, name)
+        check(after["media"]["player_state"] in ("IDLE", "PLAYING", "PAUSED"),
+              "the speaker reached a sane state after playback")
+    finally:
+        media.stop()
+        await asyncio.to_thread(manager.close)
 
 
 # --------------------------------------------------------------------------
 
-
-def main() -> int:
+async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--online", action="store_true",
-                        help="also run checks that need internet (no sound).")
-    parser.add_argument("--hardware", action="store_true",
-                        help="also cast to a REAL speaker. Makes REAL sound.")
-    parser.add_argument("--speaker", default="Kitchen speaker",
-                        help="speaker used by the --hardware tier.")
+    parser.add_argument("--online", action="store_true", help="also run the real-TTS tier")
+    parser.add_argument("--hardware", action="store_true", help="also cast for real (MAKES NOISE)")
+    parser.add_argument("--speaker", default=None, help="speaker name for the hardware tier")
+    parser.add_argument("--json", action="store_true", help="print a machine-readable summary")
     args = parser.parse_args()
 
-    print("googlecast-mcp evaluation")
-    print(f"tiers: offline"
-          + (" + online" if args.online else "")
-          + (" + hardware" if args.hardware else ""))
+    snapshot_pristine()
 
-    asyncio.run(run_offline())
-    if args.online:
-        asyncio.run(run_online())
+    print("== googlecast-mcp eval ==")
+    await tier_offline()
+    assert_pristine("after offline")
+
+    if args.online or args.hardware:
+        await tier_online()
+        assert_pristine("after online")
+
     if args.hardware:
-        asyncio.run(run_hardware(args.speaker))
+        await tier_hardware(args.speaker)
+        assert_pristine("after hardware")
 
-    total = len(PASSED) + len(FAILED)
-    print(f"\n{len(PASSED)}/{total} checks passed")
-    if FAILED:
-        print("\nfailed:")
-        for name, detail in FAILED:
-            print(f"  - {name}" + (f"  ({detail})" if detail else ""))
-        return 1
-    return 0
+    total = PASSED + len(FAILED)
+    print(f"\n{PASSED}/{total} checks passed")
+    for f in FAILED:
+        print(f"  FAILED: {f}")
+    if args.json:
+        print(json.dumps({"passed": PASSED, "total": total, "failures": FAILED}))
+    return 0 if not FAILED else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))

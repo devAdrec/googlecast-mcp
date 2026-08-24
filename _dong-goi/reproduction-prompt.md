@@ -1,120 +1,177 @@
 # Prompt dựng lại googlecast-mcp
 
-Dán trọn phần trong khung dưới cho một AI có quyền chạy lệnh và ghi file, trên
-một máy Linux **cùng mạng LAN với loa Google**. Mục tiêu là dựng lại đúng
-product này từ con số không.
+Dán khối dưới đây cho một AI coding agent trong một thư mục trống. Nó dựng lại
+đúng sản phẩm này, **không** cần đọc mã nguồn cũ.
 
-Prompt cố ý **không** nói trước các đáp án đã tìm ra ở lần đầu (chọn thư viện
-nào, sửa lỗi mạng ra sao). Nó nêu yêu cầu và ràng buộc, để bản dựng lại vẫn
-phải tự đi qua các quyết định. Muốn đối chiếu đáp án thì đọc `method-note.md`
-sau khi làm xong, đừng đọc trước.
+Khác với `method-note.md`: file kia dạy cách nghĩ để xây cái khác; file này
+dựng lại đúng cái này.
 
 ---
 
 ```
-Xây cho tôi một MCP server bằng Python, chạy trên máy Linux cùng mạng LAN với
-loa Google Cast trong nhà tôi. Ba yêu cầu:
+Xây một MCP server bằng Python để nói tiếng Việt ra loa Google Cast trong nhà.
 
-1. dò danh sách các google speaker trong mạng nội bộ sau đó lưu lại
-2. gửi tin nhắn là text tham số truyền vào mcp sau đó chuyển thanh âm thanh
-   hỗ trợ tiếng việt sau đó phát lên speaker theo yêu cầu
-3. nếu user không chọn speaker sẽ hỏi user xem phát ở speaker nào, hoặc tất cả
+## Ba yêu cầu chức năng
 
-Ràng buộc:
-- Python 3.11+, quản lý phụ thuộc bằng uv.
-- Dùng MCP SDK chính thức (modelcontextprotocol/python-sdk), FastMCP.
-  Ghim phiên bản dưới 2.0 và kiểm tra kỹ: trên PyPI có một gói tên "mcp"
-  phiên bản 2.0.0 KHÔNG liên quan, kéo theo httpx2 và mcp-types. Trước khi
-  ghim, xác minh gói bạn chọn phụ thuộc httpx (không phải httpx2).
-- TTS tiếng Việt phải không cần khoá API, không cần tài khoản.
-- Phải chạy được cả stdio (client cùng máy) lẫn streamable HTTP (client máy khác).
-- Phải chạy được như systemd service, có install/remove/start/stop/restart/
-  status/logs.
+1. Dò danh sách loa Google trong mạng nội bộ, sau đó LƯU LẠI (bền qua restart,
+   không phải cache RAM).
+2. Nhận text làm tham số, chuyển thành âm thanh tiếng Việt, phát lên loa theo
+   yêu cầu.
+3. Nếu người dùng không chọn loa thì hỏi lại xem phát ở loa nào, hoặc tất cả.
 
-Cách làm việc tôi muốn:
+## Ba yêu cầu vận hành
 
-A. TRƯỚC KHI THIẾT KẾ, hãy trả lời: giao thức Google Cast bắt buộc phía server
-   phải cung cấp những gì? Liệt kê ràng buộc không né được và hệ quả kiến trúc
-   của từng cái. Đừng đề xuất giải pháp vội.
+4. Chạy được dạng systemd service; có install / remove / start / stop /
+   restart / status / logs.
+5. Cổng cố định, biết trước, để đặt được sau nginx reverse proxy có TLS.
+6. Chạy được với client trong trình duyệt, và với client khắt khe hơn đặc tả.
 
-B. CHỌN THƯ VIỆN — tách hai loại:
-   - Thành phần tôi CẢM NHẬN ĐƯỢC (giọng đọc): so sánh vài phương án, tự chấm
-     phần kỹ thuật (cần khoá API không, chi phí, phụ thuộc, mức bảo trì), nhưng
-     phần "nghe có tự nhiên không" thì ĐỪNG tự chấm — dựng mẫu thật của từng
-     phương án cho tôi tự nghe. MỘT VÒNG THÔI.
-   - Thành phần XƯƠNG SỐNG (thư viện giao thức Cast): chọn theo mức độ còn được
-     bảo trì và độ phủ giao thức. Nếu chỉ có một lựa chọn còn sống thì nói thẳng,
-     đừng dựng bảng so sánh cho có.
+## Thư viện — đã chốt, đừng so sánh lại
 
-C. THIẾT KẾ TRƯỚC hành vi khi THIẾU thông tin, trước khi viết chức năng chính.
-   Việc này phát ra tiếng thật trong nhà tôi — tác dụng phụ không rút lại được.
-   Thiếu tên loa thì tuyệt đối không được đoán bừa, và cũng không được phát ra
-   tất cả loa.
+- `pychromecast` cho giao thức Cast. Thư viện Python duy nhất còn bảo trì.
+- `edge-tts` cho giọng nói: `vi-VN-HoaiMyNeural` (nữ), `vi-VN-NamMinhNeural`
+  (nam). Đã so với gTTS (giọng máy móc), Google Cloud TTS (cần key + phí),
+  Piper (offline nhưng yếu). edge-tts tự nhiên nhất và không cần key.
+- SDK MCP: ghim `mcp[cli]>=1.13,<2`. Trên PyPI có gói tên `mcp` phiên bản
+  2.0.0 KHÔNG liên quan, kéo theo httpx2 và mcp-types. Đừng cài nhầm.
+- Python >= 3.11, quản lý bằng uv.
 
-D. BỘ KIỂM phân tầng theo tác dụng phụ:
-   - tầng mặc định: KHÔNG mạng, KHÔNG tiếng, KHÔNG chạm thiết bị thật, và không
-     được ghi đè file dữ liệu thật của tôi. Đẩy được bao nhiêu kiểm tra xuống
-     tầng này thì đẩy.
-   - tầng --online: được dùng internet, vẫn không phát tiếng.
-   - tầng --hardware: cast thật, phát tiếng thật. Phải hỏi tôi trước khi chạy.
-   Bộ dữ liệu giả phải có tình huống: một NHÓM loa và một THÀNH VIÊN của nhóm
-   đó là cùng một cái loa vật lý (cùng địa chỉ host).
+## Ràng buộc gốc — đọc kỹ, mọi thứ khác mọc ra từ đây
 
-E. KIỂM NGƯỢC bộ kiểm, theo đúng thứ tự sau:
-   1. Viết ra TRƯỚC danh sách những mục sẽ phải đỏ khi cấy một lỗi cụ thể vào.
-   2. Cấy lỗi. Chạy.
-   3. So kỳ vọng với thực tế. Mục nào LẼ RA ĐỎ MÀ VẪN XANH là test giả — phải
-      SỬA cho nó bắt được, hoặc ghi rõ CHƯA PHỦ. Chỉ chú thích lại là không đủ.
-   4. Khôi phục, rồi xác minh mã nguồn đã sạch (git diff phải rỗng).
-   Ghi trọn quy trình và số liệu vào README của thư mục kiểm.
+Thiết bị Cast TỰ đi tải media qua HTTP. Nó KHÔNG đọc được đường dẫn file local.
 
-F. VIẾT TÀI LIỆU CÀI ĐẶT theo phép thử này: một người lạ, máy sạch, CHỈ đọc
-   file đó, có đưa được server tới chỗ GỌI ĐƯỢC TOOL không? Không dừng ở "cài
-   xong". Không giả định người đọc đã có sẵn công cụ hay đang đứng trong repo.
-   Viết xong thì tự chạy lại TỪNG lệnh trên một bản clone trắng và dán output
-   thật vào làm bằng chứng. Dùng cổng rỗi, đừng đụng dịch vụ đang chạy.
+Vì vậy server bắt buộc kiêm luôn một HTTP file server phục vụ thư mục cache mp3.
+Bind `0.0.0.0`, nhưng URL quảng bá cho loa phải dựng từ địa chỉ LAN thật của máy
+— HAI THỨ KHÁC NHAU, đừng lẫn.
 
-Khi gặp lỗi tầng mạng: mỗi mã lỗi HTTP là một câu trả lời cụ thể, lập bảng tra
-thay vì đoán. Nếu hệ thống IM LẶNG (treo, không lỗi, không log) thì nghi tầng
-trung gian (proxy, trình duyệt) trước khi nghi mã nguồn của bạn.
+Máy chạy server phải cùng LAN với loa: mDNS không đi qua router, và loa phải
+với tới được server.
 
-Nếu tôi lặp lại y hệt một câu than phiền hai lần, ĐỪNG sửa tiếp — hãy kiểm tra
-xem bản sửa của bạn đã thực sự được NẠP vào tiến trình đang chạy chưa.
+## Module
 
-Trước khi kết luận một nguyên nhân hệ thống từ vài thiết bị cùng hỏng: hai mẫu
-trùng nhau không đủ. Cho tôi phép thử rẻ nhất tách được các giả thuyết.
+- `cast_manager.py`   — bọc pychromecast, thread-safe, cache kết nối sống
+- `speaker_store.py`  — lưu bền ra ~/.googlecast-mcp/speakers.json
+- `tts.py`            — edge-tts, cache mp3 theo hash của (voice|rate|volume|text)
+- `media_server.py`   — HTTP server phục vụ thư mục cache
+- `server.py`         — FastMCP, 13 tool
+- `__main__.py`       — CLI, chọn transport, cấu hình bảo mật
+
+13 tool: say, discover_devices, list_speakers, list_devices, get_status,
+play_media, play, pause, stop, seek, set_volume, set_muted, quit_app.
+
+pychromecast là blocking. Mọi lời gọi tới nó phải đi qua `asyncio.to_thread`
+để không chặn event loop của MCP.
+
+## Hành vi bắt buộc, không thương lượng
+
+- Loa = `cast_type` thuộc {"audio", "group"}. `cast_type == "cast"` là thiết bị
+  hình ảnh (Chromecast, Nest Hub) — không phải loa.
+- `say` KHÔNG được đặt `target` vào `required` của schema. Thiếu `target` thì
+  trả `{"status": "needs_speaker_selection", "speakers": [...], "message": ...}`
+  và KHÔNG tổng hợp âm thanh, KHÔNG gửi lệnh cast nào. Message phải nói rõ có
+  thể chọn "all".
+- Mạng không có loa nào → `{"status": "no_speakers_found", ...}`.
+- `target` nhận: một tên, nhiều tên cách phẩy, hoặc "all"/"tất cả"/"tat ca"/
+  "everyone"/"*". Không phân biệt hoa thường. Cắt khoảng trắng thừa, bỏ phần tử rỗng.
+- `target="all"` phải BỎ QUA `cast_type == "group"`. Nhóm Cast phát QUA các loa
+  thành viên, nên gửi tới cả nhóm lẫn thành viên khiến một loa vật lý nhận hai
+  luồng cùng lúc. Cả bốn lời gọi vẫn trả "playing" — API không phát hiện được,
+  chỉ nghe mới biết. Nhóm vẫn phải phát được khi gọi đích danh tên nhóm.
+- Một loa hỏng → phần tử đó trả "error" riêng, những loa còn lại vẫn phát,
+  tổng thể vẫn "ok". Chỉ khi mọi loa hỏng mới trả "failed".
+- Text rỗng hoặc chỉ khoảng trắng → ValueError, TRƯỚC khi gọi mạng.
+- `speaker_store.save()` phải HỢP NHẤT theo uuid, không thay thế: mDNS lossy,
+  một lần quét sót không được xoá thiết bị đã biết. Ghi bằng write-then-rename.
+  File hỏng hoặc thiếu → đọc ra rỗng, không sập.
+- Khi giải tên loa mà lần quét hiện tại sót, phải thử kết nối thẳng tới địa chỉ
+  đã lưu (`get_chromecast_from_host`) trước khi quét lại. Nếu không sẽ ném
+  DeviceNotFoundError cho một thiết bị mà chính store đang liệt kê — tự mâu thuẫn.
+
+## Bảo mật transport — nơi tốn nhiều thời gian nhất
+
+SDK MCP chỉ tin 127.0.0.1. Bind 0.0.0.0 KHÔNG đủ: client từ máy khác nhận
+`421 Misdirected Request`.
+
+GIỮ bảo vệ DNS-rebinding, chỉ NỚI allowlist. Tắt nó là mở cửa cho web bất kỳ
+tấn công server nội bộ.
+
+Allowlist phải gồm, và cả hai điểm này đều đã làm hỏng thật:
+- Host TRẦN, không kèm ":port" — proxy ở cổng 443 gửi Host không có phần cổng.
+- Cả scheme "https" — TLS kết thúc ở nginx nhưng origin trình duyệt vẫn là https.
+Địa chỉ bind wildcard (0.0.0.0) không được tính là một allowed host.
+
+Cờ CLI: `--transport {stdio,http,sse}`, `--host`, `--port`, `--media-port`,
+`--allow-host` (lặp được), `--json-response`, `--stateless`, `--cors-origin`
+(lặp được).
+
+CORS: SDK không sinh phản hồi CORS — OPTIONS trả 405 không header, trình duyệt
+chặn, JS chỉ thấy "Failed to fetch (check CORS?)". Bọc app Starlette bằng
+CORSMiddleware, và BẮT BUỘC `expose_headers=["Mcp-Session-Id"]` — không expose
+thì trình duyệt không giữ được phiên, mà triệu chứng trông giống hệt lỗi CORS.
+
+`--json-response` cho client không đọc được khung SSE; `--stateless` cho client
+bỏ qua header session.
+
+## Service và reverse proxy
+
+`scripts/service.sh`: sinh unit systemd, MCP mặc định 8765, media 8766, đọc
+MCP_HOST / MCP_PORT / MEDIA_PORT / MCP_EXTRA_ARGS từ môi trường.
+
+`install` phải gọi `systemctl restart` tường minh. `enable --now` KHÔNG khởi
+động lại service đang chạy — tiến trình cũ từng sống ba ngày với dòng lệnh cũ
+và trông y hệt như bản sửa không có tác dụng.
+
+`status` phải in `/proc/<MainPID>/cmdline`, để phân biệt được "bản sửa sai" với
+"bản sửa chưa được nạp".
+
+nginx: `proxy_buffering off` và `proxy_read_timeout 3600s`. Thiếu cái đầu thì
+client TREO IM, không có lỗi nào để tìm. Chỉ proxy 8765; 8766 ở lại LAN vì loa
+lấy file trực tiếp.
+
+Tên miền KHÔNG được có gạch dưới: CA/B Forum cấm "_", nên tên như
+`google_cast.example.com` không bao giờ xin được chứng chỉ — mà Claude Desktop
+chỉ nhận https. Ngõ cụt tuyệt đối, không có cách vòng.
+
+Claude Desktop ở máy khác: ô custom connector chỉ nhận https, nên với server
+LAN chạy http phải bắc cầu bằng
+`npx -y mcp-remote http://<ip>:8765/mcp --allow-http`.
+
+## Eval — viết cùng lúc với mã, không để sau
+
+Ba tầng phân theo TÁC DỤNG PHỤ:
+- mặc định: offline, không mạng, không tiếng. Chạy ở đâu cũng an toàn.
+- `--online`: gọi edge-tts thật, vẫn im lặng.
+- `--hardware`: cast thật, PHÁT TIẾNG. Cờ opt-in, phải xin phép mỗi lần.
+
+Test mà không ai dám chạy thì bằng không có.
+
+VỆ SINH MOCK — đã dính hai lần, đừng đi lại:
+- Mọi phép thay thế đi qua context manager khôi phục trong `finally`.
+- Một hàm kiểm "còn sạch không" chạy SAU MỖI TẦNG, đối chiếu với ảnh chụp lấy
+  trước khi tầng đầu tiên chạy.
+- Tầng online và hardware phải DỰNG OBJECT MỚI của riêng mình, không dùng
+  singleton dùng chung. Một canh gác chỉ che một đường; cô lập mới giải quyết.
+- ĐỪNG dùng importlib.reload để "lấy lại bản sạch": nó gán lại function object
+  mới và phá mất tay nắm duy nhất vào hàm thật.
+
+Kiểm hai điều-không-xảy-ra bằng tripwire (hàm ném lỗi nếu bị gọi), không bằng
+giá trị trả về: thiếu `target` thì KHÔNG cast và KHÔNG gọi TTS.
+
+Kiểm `all` theo `host`, KHÔNG theo tên. Và kiểm PHỦ CHÍNH XÁC (số lần cast
+bằng đúng tập host loa riêng biệt), không phải "không trùng" — "không trùng"
+vẫn xanh khi `all` sai thành đúng một phần tử. Đó là một test giả.
+
+KIỂM NGƯỢC: viết một script gieo lỗi vào mã, với danh sách kỳ-vọng-đỏ ghi
+TRƯỚC khi gieo. Mục nào lẽ ra đỏ mà vẫn xanh là TEST GIẢ. Sau khi khôi phục
+phải XOÁ BYTECODE và xác minh eval xanh lại — một lỗi gieo vào dài y hệt bản
+gốc sẽ để lại .pyc cũ khiến cây mã đã khôi phục vẫn chạy như bản hỏng.
+
+## Tài liệu
+
+README.md (cài đặt, cấu hình client, gỡ lỗi) và docs/architecture.md (luồng
+xử lý, mô hình luồng, mô hình bảo mật, "những chỗ cắn người").
+
+Nói thẳng những điểm còn hở: không có xác thực ở tầng ứng dụng; cổng audio
+bind 0.0.0.0 không xác thực và không đi qua nginx nên chặn IP ở nginx không
+che được nó; cache TTS tăng vô hạn.
 ```
-
----
-
-## Kỳ vọng đầu ra
-
-Dựng lại thành công thì phải có:
-
-- `src/…/{cast_manager, speaker_store, tts, media_server, server, __main__}.py`
-  hoặc tương đương — trong đó **có một HTTP file server**, vì giao thức Cast bắt
-  buộc thế.
-- 13 tool: `say` cộng 12 tool điều khiển.
-- `say` thiếu tên loa → **không phát gì, không tổng hợp gì**, trả về danh sách
-  loa kèm câu dặn mô hình hỏi lại.
-- `all` → **bỏ qua nhóm loa** (nhóm vẫn phát được khi gọi đích danh).
-- Script quản lý systemd dùng `restart`, **không** `enable --now`.
-- Bộ kiểm ba tầng, đã kiểm ngược, có ghi lại danh sách kỳ vọng viết trước.
-- Tài liệu cài đặt đã qua phép thử "người lạ, máy sạch, gọi được tool".
-
-## Những chỗ bản dựng lại nhiều khả năng sẽ vấp
-
-Đây là danh sách để **đối chiếu sau khi làm xong**, không phải để đọc trước:
-
-- `421 Misdirected Request` với client ở máy khác — bind `0.0.0.0` không đủ.
-- Allowlist thiếu scheme `https`, hoặc thiếu host trần không kèm `:port`.
-- CORS quên expose header `Mcp-Session-Id`.
-- nginx buffering làm client treo im lặng.
-- Tên miền có dấu gạch dưới → không bao giờ xin được chứng chỉ.
-- `enable --now` không khởi động lại tiến trình đang chạy.
-- `all` gửi tới cả nhóm lẫn thành viên → chồng luồng, mà **API vẫn báo
-  `playing`**.
-- Mục test chống trùng lặp so theo **tên** thay vì theo **host** → xanh giả.
-- `pkill -f "<mẫu>"` khớp luôn chính lệnh bash đang chạy → tự giết shell.
-
-Giải thích đầy đủ từng cái: `method-note.md` và `package/technical-docs.md`.

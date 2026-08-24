@@ -1,127 +1,136 @@
 # Ràng buộc triển khai
 
-Kiến trúc bên trong (luồng xử lý, mô hình luồng, cách phân giải thiết bị) nằm ở
-**`docs/architecture.md`** ở gốc repo. Đó là tài liệu đang sống — đọc nó, đừng
-đọc bản chép.
+Kiến trúc, luồng xử lý và vai trò từng module nằm ở **`docs/architecture.md`**
+trong repo. Trang này không chép lại, chỉ ghi những ràng buộc mà người triển
+khai buộc phải biết mới dựng lại được hệ thống — phần dễ sai nhất, và phần
+`docs/architecture.md` không nói.
 
-File này chỉ ghi những ràng buộc **khi đem đi triển khai**: cổng, allowlist,
-CORS, DNS. Đây là phần đắt nhất của cả dự án: gần như mọi ngày chật vật đều nằm
-ở tầng mạng, không phải ở logic.
+## Ràng buộc gốc, quyết định mọi thứ còn lại
 
----
+Thiết bị Cast **tự đi tải media qua HTTP**. Nó không đọc được đường dẫn file
+trên máy bạn. Vì vậy một server "nói được" bắt buộc phải kiêm luôn một HTTP
+file server mà loa với tới được. Mọi rắc rối về cổng, bind, tường lửa và bảo
+mật dưới đây đều mọc ra từ câu đó.
 
-## 1. Cổng
+Hệ quả trực tiếp, và là chỗ hay nhầm: `media_server.py:76` bind `0.0.0.0`
+(nghe mọi giao diện), còn URL quảng bá cho loa dựng từ `lan_ip()`. **Hai thứ
+khác nhau.** Bind rộng để loa nào cũng tới được; URL phải là một địa chỉ cụ
+thể vì loa cần một địa chỉ để gọi.
 
-| Cổng | Ai nghe | Ai gọi tới | Bind |
+## Cổng
+
+| Cổng | Là gì | Bind | Ra internet được không |
 |---|---|---|---|
-| 8765 | MCP endpoint (`/mcp`) | client MCP (Claude Desktop, webui, nginx) | `0.0.0.0` |
-| 8766 | HTTP phục vụ file mp3 | **chính cái loa** | `0.0.0.0` |
+| 8765 | MCP streamable HTTP | `0.0.0.0` | có, qua nginx + TLS |
+| 8766 | Server phát file mp3 cho loa | `0.0.0.0` | **không** — chỉ LAN |
 
-Điều dễ bỏ sót nhất trong cả product: **thiết bị Cast tự đi tải media qua HTTP**.
-Nó không đọc được đường dẫn file trên máy bạn. Vì vậy một server "biết nói" bắt
-buộc phải kiêm luôn một HTTP file server. Chặn 8766 là mất tiếng, dù MCP vẫn
-xanh.
+Cổng 8766 phải cố định (`--media-port` hoặc `GOOGLECAST_MCP_MEDIA_PORT`) khi
+chạy như service. Mặc định là cổng ngẫu nhiên, tiện khi chạy tay nhưng không
+viết được luật tường lửa.
 
-Ghim cổng media (`--media-port` hoặc `GOOGLECAST_MCP_MEDIA_PORT`) khi có tường
-lửa, để chỉ phải viết một luật:
+Đừng bao giờ proxy 8766. Loa phải lấy file trực tiếp từ LAN.
 
-```bash
-sudo ufw allow from 192.168.0.0/16 to any port 8765 proto tcp
-sudo ufw allow from 192.168.0.0/16 to any port 8766 proto tcp
+## Allowlist — bảo vệ DNS-rebinding
+
+SDK MCP chỉ tin `127.0.0.1`. Bind `0.0.0.0` **không** đủ: client từ máy khác
+sẽ nhận `421 Misdirected Request`. Cách xử lý là **nới allowlist, không tắt
+bảo vệ** — tắt là mở cửa cho một trang web bất kỳ tấn công server nội bộ qua
+trình duyệt của bạn.
+
+`__main__.py:46-69` (`_transport_security`) sinh allowlist. Hai chi tiết phải
+giữ, cả hai đều từng làm hỏng và cả hai đều có test riêng:
+
+1. **Host trần, không kèm `:port`.** Một reverse proxy chạy ở cổng 443 gửi
+   header `Host: google-cast.adrec.cloud`, không có phần cổng. Nếu allowlist
+   chỉ có `<host>:*` thì mọi request qua proxy đều 421.
+2. **Cả scheme `https`.** TLS kết thúc ở nginx, nhưng origin trình duyệt gửi
+   lên vẫn là `https://...`.
+
+Thêm tên miền bằng `--allow-host <domain>` (lặp lại được). Loopback và địa chỉ
+LAN của máy luôn được cho phép.
+
+## CORS — chỉ khi client chạy trong trình duyệt
+
+SDK không sinh phản hồi CORS: `OPTIONS` trả **405 không kèm header nào**, nên
+trình duyệt chặn, và JavaScript chỉ thấy `Failed to fetch (check CORS?)` — một
+lỗi rỗng không nói gì. `--cors-origin <origin>` bọc app Starlette bằng
+`CORSMiddleware`.
+
+**Bắt buộc `expose_headers=["Mcp-Session-Id"]`** (`__main__.py:37`). Trình
+duyệt không đọc được header đó nếu không expose, nên không giữ được phiên, và
+triệu chứng lại trông giống hệt một lỗi CORS khác.
+
+Origin phải **khớp chính xác thanh địa chỉ**, kể cả cổng:
+`http://192.168.1.99:8383`, không phải `http://192.168.1.99`.
+
+## Client khắt khe hơn đặc tả
+
+| Cờ | Khi nào cần |
+|---|---|
+| `--json-response` | Client không phân tích được khung SSE `event: message` |
+| `--stateless` | Client bỏ qua header `Mcp-Session-Id` giữa các request |
+
+Client nào đúng đặc tả thì không cần cả hai.
+
+## Reverse proxy và DNS
+
+`scripts/nginx-googlecast-mcp.conf` là bản dùng được. Bốn điểm chết người:
+
+1. **`proxy_buffering off`.** Streamable HTTP giữ một phản hồi mở lâu và đẩy
+   sự kiện dần. Nginx đệm lại thì client **treo im, không báo lỗi gì** — rất
+   khó chẩn đoán vì không có thông báo nào để tìm.
+2. **`proxy_read_timeout 3600s`.** Phiên MCP rỗi không được cắt giữa chừng.
+3. **Hostname không được có gạch dưới.** CA/B Forum cấm `_` trong tên miền,
+   nên `google_cast.adrec.cloud` **không bao giờ** xin được chứng chỉ. Mà
+   Claude Desktop chỉ nhận https ⇒ ngõ cụt tuyệt đối, không có cách vòng.
+   Phải đổi sang `google-cast.adrec.cloud`.
+4. **Chỉ proxy 8765.** 8766 ở lại LAN.
+
+Đổi tên miền thì phải đồng thời thêm `--allow-host <tên mới>`, nếu không mọi
+request qua proxy trả 421.
+
+## Bắc cầu cho Claude Desktop
+
+Ô "custom connector" của Claude Desktop chỉ nhận `https`. Một server LAN chạy
+http không điền vào đó được. Bắc cầu trong `claude_desktop_config.json`:
+
+```json
+{"mcpServers":{"googlecast":{"command":"npx",
+ "args":["-y","mcp-remote","http://192.168.1.128:8765/mcp","--allow-http"]}}}
 ```
 
-**Bind và địa chỉ quảng bá là hai thứ khác nhau.** `media_server.py:76` bind
-`0.0.0.0`; còn URL đưa cho loa thì dựng từ `lan_ip()`. Nhầm hai thứ này là ra
-một URL mà loa không tới được, trong khi `netstat` trông vẫn hoàn hảo.
+## Bảo mật — nói thẳng
 
-## 2. Allowlist chống DNS-rebinding
+- **Không có xác thực ở tầng ứng dụng.** Ai gọi được `/mcp` là phát được tiếng
+  trong nhà.
+- `google-cast.adrec.cloud` **phân giải công khai ra internet**. Hai dòng
+  `allow 192.168.0.0/16; deny all;` trong file nginx đã đồng ý bật nhưng vẫn
+  đang comment.
+- Cổng 8766 phục vụ nguyên thư mục cache TTS, không xác thực, và chặn IP ở
+  nginx **không che nó** — nó không đi qua nginx.
+- Bảo vệ DNS-rebinding của SDK vẫn bật. Đừng tắt.
 
-SDK MCP mặc định **chỉ tin `127.0.0.1`**. Bind `0.0.0.0` **không** đủ: client ở
-máy khác vẫn ăn `421 Misdirected Request`.
+## Triển khai đang chạy thật
 
-Cách xử lý (`__main__.py:46-69`) là **nới**, không phải tắt. Tắt là mở cho một
-trang web bất kỳ trong trình duyệt của bạn tấn công server nội bộ.
-
-Hai chi tiết mà thiếu là hỏng, và cả hai đều có test riêng:
-
-- **Có cả scheme `https`.** Reverse proxy kết thúc TLS rồi chuyển tiếp bằng
-  http, nhưng `Origin` client gửi vẫn là `https://…`.
-- **Có cả host KHÔNG kèm `:port`.** Proxy chạy ở cổng 443 thì trình duyệt gửi
-  header `Host` trần, không có `:443`.
-
-Thêm tên miền bằng `--allow-host google-cast.adrec.cloud` (lặp lại được).
-
-## 3. CORS cho client chạy trong trình duyệt
-
-Triệu chứng: `Failed to fetch (check CORS?)` và **không có gì khác**. SDK trả
-`OPTIONS` = **405** không kèm header CORS, trình duyệt chặn ở preflight, JS chỉ
-thấy một lỗi rỗng — không có gì để lần theo.
-
-Bật bằng `--cors-origin <origin>`, origin phải **khớp chính xác** thanh địa chỉ
-(scheme + host + port).
-
-Bắt buộc phải có `expose_headers=["Mcp-Session-Id"]` (`__main__.py:37`): trình
-duyệt không đọc được header đó nếu không expose, nên không giữ nổi phiên, dù
-`initialize` vẫn trả 200. Một dòng thiếu ở đây trông y hệt "server hỏng".
-
-Client khắt khe còn cần thêm:
-
-- `--json-response` — client không phân tích nổi khung SSE `event: message`.
-- `--stateless` — client không mang `Mcp-Session-Id` giữa các request.
-
-## 4. Reverse proxy và TLS
-
-Vhost mẫu: `scripts/nginx-googlecast-mcp.conf`.
-
-- **`proxy_buffering off`** — bắt buộc. Bật buffering thì client **treo im
-  lặng**, không lỗi, không log gì. Đây là kiểu hỏng tệ nhất trong cả dự án.
-- **`proxy_read_timeout 3600s`** — SSE là kết nối dài.
-- **Tên miền tuyệt đối không được có dấu gạch dưới.** CA/B Forum cấm `_`, nên
-  `google_cast.adrec.cloud` sẽ **không bao giờ** xin được chứng chỉ. Claude
-  Desktop lại chỉ nhận `https`. Hai điều đó cộng lại thành ngõ cụt tuyệt đối,
-  không có cách vòng. Đổi tên miền là con đường duy nhất.
-
-## 5. Đăng ký phía client — bảng tra nhanh
-
-| Client | Ở đâu | Cách nối |
-|---|---|---|
-| Claude Code | cùng máy | stdio: `claude mcp add --scope user googlecast -- uv run --directory <repo> googlecast-mcp` |
-| Claude Desktop | máy khác, chưa có TLS | cầu nối `npx -y mcp-remote http://<ip>:8765/mcp --allow-http` |
-| Claude Desktop | máy khác, đã có TLS | custom connector `https://<domain>/mcp` |
-| llama-server webui | trong trình duyệt | HTTP + `--cors-origin` khớp chính xác |
-
-## 6. Triển khai hiện tại
-
-- systemd `googlecast-mcp.service` trên `192.168.1.128`
-- nginx vhost `/etc/nginx/conf.d/adrec_cloud.conf`, chứng chỉ Let's Encrypt
-- Phục vụ Claude Desktop ở `192.168.1.28` (https) và llama-server webui ở
-  `192.168.1.99:8383` (LAN + CORS)
-
-Dòng lệnh đang chạy:
+- systemd `googlecast-mcp.service` trên `192.168.1.128`, MCP 8765, audio 8766.
+- nginx vhost `/etc/nginx/conf.d/adrec_cloud.conf`, chứng chỉ Let's Encrypt.
+- Phục vụ Claude Desktop (máy `.28`) qua https, và llama-server webui
+  (`192.168.1.99:8383`) qua CORS.
 
 ```bash
 MCP_EXTRA_ARGS="--allow-host google-cast.adrec.cloud --json-response --stateless --cors-origin http://192.168.1.99:8383" \
-  ./scripts/service.sh install
+    ./scripts/service.sh install
 ```
 
-## 7. Bảng đọc mã lỗi
+## Chẩn đoán theo mã lỗi
 
 | Thấy gì | Nghĩa là gì |
 |---|---|
-| `421 Misdirected Request` | host không nằm trong allowlist → thêm `--allow-host` |
-| `403 Invalid Origin header` | origin không nằm trong allowlist |
-| `406 Not Acceptable` | client thiếu `Accept: text/event-stream`. Mở `/mcp` bằng trình duyệt cũng ra 406 — **đúng đặc tả, không phải lỗi** |
-| `405` cho `OPTIONS`, không header CORS | chưa bật `--cors-origin` |
-| `Failed to fetch (check CORS?)` | như trên; trình duyệt không nói gì thêm |
-| client treo, không lỗi, không log | nginx đang buffering |
-| `wait timed out` khi cast | thiết bị treo. Kiểm `nc -z <ip> 8009` **trước khi** nghi mã nguồn |
-| sửa xong mà "vẫn lỗi" y hệt | tiến trình cũ chưa được nạp lại. `./scripts/service.sh status` và đọc dòng `/proc/<pid>/cmdline` |
-
-## 8. Chỗ còn hở, biết rõ và chưa vá
-
-- **Không có xác thực ở tầng ứng dụng.** Ai tới được endpoint là điều khiển
-  được loa. `google-cast.adrec.cloud` phân giải công khai ra internet.
-- **8766 không xác thực**, phục vụ nguyên thư mục cache TTS. Chặn IP ở nginx
-  chỉ che 8765 — 8766 vẫn hở.
-- Hai dòng chặn IP trong vhost nginx **đã bàn nhưng vẫn đang comment**, chưa bật.
-- Cache TTS chỉ tăng, chưa có dọn.
+| `421 Misdirected Request` | Host client dùng chưa có trong allowlist → `--allow-host` |
+| `403` | Origin chưa được phép → `--cors-origin` |
+| `406 Not Acceptable` | Thiếu `Accept: text/event-stream`. Mở bằng trình duyệt ra lỗi này là **đúng**, không phải hỏng |
+| `405` ở preflight, không header | Chưa bật CORS |
+| Client treo, không lỗi | Nginx đang đệm → `proxy_buffering off` |
+| `Failed to fetch (check CORS?)` | Có thể là CORS, cũng có thể do thiếu `expose_headers` |
+| `wait timed out` khi cast | Thiết bị treo. Kiểm `nc -z <ip> 8009` **trước** khi nghi mã nguồn |
+| Sửa rồi mà vẫn y nguyên | Tiến trình cũ còn sống. `service.sh status` xem `/proc/<pid>/cmdline` |
