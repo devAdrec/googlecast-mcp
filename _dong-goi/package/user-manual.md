@@ -1,114 +1,118 @@
-# Hướng dẫn dùng
+# Dùng hằng ngày
 
-Dành cho người đã cài xong (`README.md`) và muốn nói một câu ra loa.
+Dành cho người đã cài xong (`package/README.md`) và đang chat với một trợ lý AI
+có nối `googlecast-mcp`.
 
-## Nói một câu
+## 1. Việc chính: bảo loa nói
 
-```
-say(text="Cơm đã chín rồi", target="Kitchen speaker")
-```
+Cứ nói bằng tiếng thường. Trợ lý sẽ tự gọi tool `say`.
 
-Trong Claude, không cần gõ tên tool — nói thẳng *"báo lên loa bếp là cơm chín
-rồi"* là đủ.
+> "Nói 'Cơm đã chín rồi' ra loa bếp"
+>
+> "Thông báo tất cả các loa: 15 phút nữa xe tới"
+>
+> "Đọc câu này ở loa phòng ngủ giọng nam, chậm lại một chút: ..."
 
-| Tham số | Bắt buộc | Nghĩa |
-|---|---|---|
-| `text` | có | Câu cần nói. Tiếng Việt có dấu chạy tốt. Rỗng thì bị từ chối |
-| `target` | **không** | Loa nào. Bỏ trống là cố ý — xem dưới |
-| `voice` | không | `female` (mặc định), `male`, hoặc một voice id edge-tts đầy đủ |
-| `rate` | không | Tốc độ nói, ví dụ `-20%` chậm lại, `+10%` nhanh lên |
+**Nếu bạn không nói loa nào, trợ lý sẽ hỏi lại.** Đó là hành vi cố ý: sản phẩm
+sẽ **không phát gì cả** khi chưa biết phát ở đâu. Đoán sai là cả nhà nghe.
 
-## Các dạng `target`
+## 2. Các cách chỉ định loa
 
-| Gõ gì | Xảy ra gì |
+| Bạn viết | Nghĩa là |
 |---|---|
-| `"Kitchen speaker"` | Phát ở đúng loa đó |
-| `"Kitchen speaker, Office speaker"` | Phát ở cả hai, song song |
-| `"all"` hoặc `"tất cả"` | Phát ở mọi loa **thật**, mỗi loa đúng một lần |
-| `"Family speaker group"` | Phát qua nhóm loa, như trong app Google Home |
-| bỏ trống | **Không phát gì.** Trả về danh sách loa để hỏi lại bạn |
-| một UUID | Cũng được, nếu hai loa trùng tên |
+| `Kitchen speaker` | đúng một loa (không phân biệt hoa/thường) |
+| `Kitchen speaker, Bedroom speaker` | nhiều loa, cách nhau dấu phẩy |
+| `all` / `tất cả` / `tat ca` / `everyone` / `*` | mọi loa đơn |
+| `Family speaker group` | một nhóm loa, gọi đích danh |
+| *(bỏ trống)* | trợ lý hỏi lại, không phát gì |
+| `f88d1e3f-…` | uuid thiết bị, cũng nhận |
 
-Tên loa không phân biệt hoa thường.
+### "tất cả" cố tình BỎ QUA các nhóm loa
 
-### Vì sao `all` bỏ qua nhóm loa
+Nhóm Cast phát **thông qua** các loa thành viên. Nếu "tất cả" gửi tới cả nhóm
+lẫn từng thành viên, một loa vật lý nhận **hai luồng cùng lúc** — nghe như tiếng
+vọng chồng lên nhau.
 
-Một nhóm Cast phát *qua* các loa thành viên. Nếu `all` gửi tới cả nhóm lẫn
-từng thành viên, một loa vật lý sẽ nhận hai luồng cùng lúc, nghe như vọng và
-lệch. Nên `all` chỉ gửi tới từng loa riêng lẻ. Muốn dùng nhóm thì gọi đích
-danh tên nhóm.
+Điều đáng sợ là **API vẫn báo `playing` cho cả bốn đích** — nhìn kết quả trả về
+thì không phân biệt được với lần phát đúng. Chỉ nghe mới biết.
 
-Đáng nói: khi lỗi này còn, cả bốn lời gọi đều trả `playing`. API không phát
-hiện được — chỉ nghe mới biết.
+Nên: `all` chỉ gửi tới loa đơn. Muốn dùng nhóm thì **gọi tên nhóm**, và khi đó
+đừng dùng `all` cùng lúc.
 
-### Vì sao bỏ `target` lại không phát gì
+## 3. Giọng và tốc độ
 
-Phát tiếng ra loa là một tác dụng phụ vật lý trong nhà người khác. Mặc định
-phát ra tất cả loa vì người dùng quên nói rõ là một mặc định tồi. Nên server
-trả về:
+| Tham số | Giá trị | Mặc định |
+|---|---|---|
+| `voice` | `female`, `male`, hoặc id edge-tts đầy đủ | `female` (`vi-VN-HoaiMyNeural`) |
+| `rate` | `-50%` … `+100%` | `+0%` |
 
-```json
-{"status": "needs_speaker_selection",
- "speakers": [...],
- "message": "No target given. Ask the user which speaker ... Available: ..."}
-```
+Giọng nam là `vi-VN-NamMinhNeural`. **Lưu ý:** giọng nam và tham số `rate` chưa
+từng được ai nghe bằng tai để đánh giá — chỉ mới kiểm là "có ra file âm thanh".
 
-LLM đọc cái đó rồi hỏi lại bạn. Không có âm thanh nào được tổng hợp, không có
-lệnh nào gửi đi.
+Câu giống hệt nhau (cùng giọng, cùng tốc độ) được lấy từ cache, không đọc lại.
 
-## Các tool khác
+## 4. Các tool khác
 
 | Tool | Dùng khi |
 |---|---|
-| `discover_devices` | Quét lại LAN. Chạy khi có loa mới, hoặc loa đổi IP |
-| `list_speakers` | Xem các loa đã biết (không quét lại). Bỏ thiết bị hình ảnh |
-| `list_devices` | Mọi thiết bị Cast, kể cả Chromecast/Nest Hub |
-| `get_status` | Loa đang phát gì, âm lượng bao nhiêu |
-| `play_media` | Cast một URL bất kỳ (nhạc, video) — loa tự đi tải URL đó |
-| `play` / `pause` / `stop` / `seek` | Điều khiển nội dung đang phát |
-| `set_volume` / `set_muted` | Âm lượng 0.0–1.0; tự kẹp vào khoảng hợp lệ |
-| `quit_app` | Trả thiết bị về màn hình chờ |
+| `list_speakers` | xem có những loa nào (đọc danh sách đã lưu, nhanh) |
+| `discover_devices` | quét lại mạng — dùng khi vừa thêm loa mới |
+| `list_devices` | mọi thiết bị Cast, **kể cả TV và màn hình** |
+| `get_status` | đang phát gì, âm lượng bao nhiêu |
+| `play_media` | phát một URL bất kỳ (nhạc, video) |
+| `play` / `pause` / `stop` / `seek` | điều khiển phát |
+| `set_volume` / `set_muted` | âm lượng 0.0–1.0 (giá trị ngoài khoảng bị kẹp lại) |
+| `quit_app` | đưa thiết bị về màn hình chờ |
 
-## Cắm vào client
+## 5. Lỗi thường gặp
 
-| Client | Cách |
-|---|---|
-| Claude Code, cùng máy | `claude mcp add --scope user googlecast -- uv run --directory <repo> googlecast-mcp` |
-| Claude Desktop, máy khác | Ô connector chỉ nhận https. Bắc cầu bằng `npx -y mcp-remote http://<ip>:8765/mcp --allow-http` trong `claude_desktop_config.json` |
-| Claude Desktop qua tên miền | Dựng nginx + TLS, rồi `--allow-host <domain>` |
-| Client trình duyệt (llama-server webui) | Cần `--cors-origin <origin khớp chính xác thanh địa chỉ>` |
+### "Trợ lý hỏi tôi phát ở loa nào mà tôi đã nói rồi"
 
-Chi tiết và lý do: `technical-docs.md`.
+Tên loa phải khớp tên **friendly name** thật. Hỏi "liệt kê các loa" để xem danh
+sách chính xác rồi chép lại.
 
-## Lỗi thường gặp
+### Một loa im, các loa khác vẫn nói
 
-**"Nó bảo playing mà không nghe thấy gì"**
-Kiểm âm lượng loa trước. Rồi kiểm thiết bị có treo không: `nc -z <ip> 8009`.
-mDNS và ping vẫn trả lời trong khi cổng 8009 đã từ chối — restart thiết bị là
-hết. Đã gặp thật trên Nest Hub, và mất ba lần thử mới nhận ra.
+Đúng thiết kế: một loa hỏng không kéo đổ cả lượt. Kết quả trả về sẽ ghi
+`status: error` riêng cho loa đó. Xem lý do ở dòng `error`.
 
-**"Đèn loa nháy rồi tắt, không phát hết câu"**
-Thường là loa không tải được file âm thanh: cổng 8766 bị tường lửa chặn, hoặc
-máy chạy server không cùng LAN với loa.
+### `wait timed out` — loa không phản hồi
 
-**`DeviceNotFoundError` với một loa chắc chắn đang có**
-mDNS lossy, một lần quét có thể sót. Server đã tự thử kết nối thẳng tới địa
-chỉ đã lưu trước khi quét lại. Nếu loa đổi IP thì chạy `discover_devices`.
+Gần như luôn là **thiết bị treo**, không phải lỗi phần mềm. Dấu hiệu điển hình:
+mDNS thấy nó, ping được, mà cổng 8009 từ chối kết nối.
 
-**Mở `http://<ip>:8765/mcp` bằng trình duyệt thì ra `406`**
-Đúng như thế. Endpoint MCP không phải trang web.
+```bash
+nc -z <ip-của-loa> 8009
+```
 
-**"Đã sửa rồi mà vẫn lỗi y hệt"**
-Dừng sửa. Kiểm bản sửa đã được nạp chưa: `./scripts/service.sh status` in
-dòng lệnh của tiến trình đang chạy thật. `systemctl enable --now` **không**
-khởi động lại service đang chạy — tiến trình cũ từng sống ba ngày như thế.
+Không thông → rút điện loa 10 giây rồi cắm lại. Đã gặp: một Nest Hub hỏng **3
+lần liên tiếp trong 2 ngày**, khởi động lại là hết hẳn.
 
-**Máy tính không cùng LAN với loa**
-Không có cách vòng. mDNS không đi qua router, và loa phải với tới được máy này
-để tải file.
+### Loa nháy sáng rồi tắt, không phát hết câu
 
-## Riêng tư
+Thiết bị nhận được media nhưng ngắt giữa chừng. Kiểm: máy chạy server có còn
+cùng LAN với loa không, và cổng audio (8766) có bị firewall chặn không — loa
+phải **tải ngược** file từ máy đó.
 
-Text được gửi tới dịch vụ giọng nói của Microsoft Edge để tổng hợp. File mp3
-lưu trong thư mục cache trên máy chạy server và phục vụ **không xác thực** ở
-cổng 8766 cho mọi máy trong LAN. Đừng cho nó đọc điều gì bí mật.
+### Trợ lý báo mất kết nối MCP
+
+```bash
+./scripts/service.sh status     # đọc kỹ dòng "Running command line"
+./scripts/service.sh restart
+./scripts/service.sh logs
+```
+
+Dòng "Running command line" quan trọng: **file cấu hình có thể đã đổi mà tiến
+trình đang chạy thì chưa.**
+
+### Vừa sửa cấu hình mà "vẫn lỗi y hệt"
+
+Trước khi sửa tiếp, hãy kiểm **bản sửa đã thật sự được nạp chưa**. Lỗi lặp lại
+không đổi một chữ thường là dấu hiệu bạn đang sửa thứ chưa chạy — không phải
+dấu hiệu bạn sửa sai chỗ.
+
+## 6. Điều nên biết trước khi mở ra internet
+
+Sản phẩm này **không có xác thực ở tầng ứng dụng**. Ai gọi được endpoint là phát
+được tiếng vào nhà bạn. Cổng audio 8766 còn phục vụ nguyên thư mục cache TTS
+cho bất kỳ ai trong LAN. Xem `technical-docs.md` mục 6 trước khi phơi ra ngoài.

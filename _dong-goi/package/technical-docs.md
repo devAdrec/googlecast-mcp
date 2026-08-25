@@ -1,136 +1,160 @@
-# Ràng buộc triển khai
+# Kỹ thuật — ràng buộc triển khai
 
-Kiến trúc, luồng xử lý và vai trò từng module nằm ở **`docs/architecture.md`**
-trong repo. Trang này không chép lại, chỉ ghi những ràng buộc mà người triển
-khai buộc phải biết mới dựng lại được hệ thống — phần dễ sai nhất, và phần
-`docs/architecture.md` không nói.
+**Kiến trúc đầy đủ ở `docs/architecture.md` (gốc repo). Đó là tài liệu SỐNG —
+đọc nó trước.** File này chỉ ghi những ràng buộc mà người triển khai buộc phải
+biết trước khi đụng vào cấu hình, và những điểm hở chưa vá.
 
-## Ràng buộc gốc, quyết định mọi thứ còn lại
-
-Thiết bị Cast **tự đi tải media qua HTTP**. Nó không đọc được đường dẫn file
-trên máy bạn. Vì vậy một server "nói được" bắt buộc phải kiêm luôn một HTTP
-file server mà loa với tới được. Mọi rắc rối về cổng, bind, tường lửa và bảo
-mật dưới đây đều mọc ra từ câu đó.
-
-Hệ quả trực tiếp, và là chỗ hay nhầm: `media_server.py:76` bind `0.0.0.0`
-(nghe mọi giao diện), còn URL quảng bá cho loa dựng từ `lan_ip()`. **Hai thứ
-khác nhau.** Bind rộng để loa nào cũng tới được; URL phải là một địa chỉ cụ
-thể vì loa cần một địa chỉ để gọi.
-
-## Cổng
-
-| Cổng | Là gì | Bind | Ra internet được không |
-|---|---|---|---|
-| 8765 | MCP streamable HTTP | `0.0.0.0` | có, qua nginx + TLS |
-| 8766 | Server phát file mp3 cho loa | `0.0.0.0` | **không** — chỉ LAN |
-
-Cổng 8766 phải cố định (`--media-port` hoặc `GOOGLECAST_MCP_MEDIA_PORT`) khi
-chạy như service. Mặc định là cổng ngẫu nhiên, tiện khi chạy tay nhưng không
-viết được luật tường lửa.
-
-Đừng bao giờ proxy 8766. Loa phải lấy file trực tiếp từ LAN.
-
-## Allowlist — bảo vệ DNS-rebinding
-
-SDK MCP chỉ tin `127.0.0.1`. Bind `0.0.0.0` **không** đủ: client từ máy khác
-sẽ nhận `421 Misdirected Request`. Cách xử lý là **nới allowlist, không tắt
-bảo vệ** — tắt là mở cửa cho một trang web bất kỳ tấn công server nội bộ qua
-trình duyệt của bạn.
-
-`__main__.py:46-69` (`_transport_security`) sinh allowlist. Hai chi tiết phải
-giữ, cả hai đều từng làm hỏng và cả hai đều có test riêng:
-
-1. **Host trần, không kèm `:port`.** Một reverse proxy chạy ở cổng 443 gửi
-   header `Host: google-cast.adrec.cloud`, không có phần cổng. Nếu allowlist
-   chỉ có `<host>:*` thì mọi request qua proxy đều 421.
-2. **Cả scheme `https`.** TLS kết thúc ở nginx, nhưng origin trình duyệt gửi
-   lên vẫn là `https://...`.
-
-Thêm tên miền bằng `--allow-host <domain>` (lặp lại được). Loopback và địa chỉ
-LAN của máy luôn được cho phép.
-
-## CORS — chỉ khi client chạy trong trình duyệt
-
-SDK không sinh phản hồi CORS: `OPTIONS` trả **405 không kèm header nào**, nên
-trình duyệt chặn, và JavaScript chỉ thấy `Failed to fetch (check CORS?)` — một
-lỗi rỗng không nói gì. `--cors-origin <origin>` bọc app Starlette bằng
-`CORSMiddleware`.
-
-**Bắt buộc `expose_headers=["Mcp-Session-Id"]`** (`__main__.py:37`). Trình
-duyệt không đọc được header đó nếu không expose, nên không giữ được phiên, và
-triệu chứng lại trông giống hệt một lỗi CORS khác.
-
-Origin phải **khớp chính xác thanh địa chỉ**, kể cả cổng:
-`http://192.168.1.99:8383`, không phải `http://192.168.1.99`.
-
-## Client khắt khe hơn đặc tả
-
-| Cờ | Khi nào cần |
+| Muốn biết | Đọc ở đâu |
 |---|---|
-| `--json-response` | Client không phân tích được khung SSE `event: message` |
-| `--stateless` | Client bỏ qua header `Mcp-Session-Id` giữa các request |
+| Luồng dữ liệu, vai trò từng module | `docs/architecture.md` |
+| Cờ dòng lệnh, cách nối client | `README.md` (gốc repo) và `package/README.md` |
+| Cài từ số 0 | `package/README.md` |
+| Cách kiểm chứng | `package/eval/README.md` |
 
-Client nào đúng đặc tả thì không cần cả hai.
+---
 
-## Reverse proxy và DNS
+## 1. Ràng buộc kiến trúc không thương lượng được
 
-`scripts/nginx-googlecast-mcp.conf` là bản dùng được. Bốn điểm chết người:
+### 1.1 Server "nói được" bắt buộc kiêm HTTP file server
 
-1. **`proxy_buffering off`.** Streamable HTTP giữ một phản hồi mở lâu và đẩy
-   sự kiện dần. Nginx đệm lại thì client **treo im, không báo lỗi gì** — rất
-   khó chẩn đoán vì không có thông báo nào để tìm.
-2. **`proxy_read_timeout 3600s`.** Phiên MCP rỗi không được cắt giữa chừng.
-3. **Hostname không được có gạch dưới.** CA/B Forum cấm `_` trong tên miền,
-   nên `google_cast.adrec.cloud` **không bao giờ** xin được chứng chỉ. Mà
-   Claude Desktop chỉ nhận https ⇒ ngõ cụt tuyệt đối, không có cách vòng.
-   Phải đổi sang `google-cast.adrec.cloud`.
-4. **Chỉ proxy 8765.** 8766 ở lại LAN.
+Thiết bị Cast **tự đi tải media qua HTTP**; nó không đọc được đường dẫn file
+trên máy bạn. Nên `media_server.py` không phải tiện ích thêm vào cho vui — nó
+là điều kiện tồn tại của tính năng `say`.
 
-Đổi tên miền thì phải đồng thời thêm `--allow-host <tên mới>`, nếu không mọi
-request qua proxy trả 421.
+Hệ quả trực tiếp:
 
-## Bắc cầu cho Claude Desktop
+- Máy chạy server **phải cùng LAN với loa**. Đặt lên đám mây thì không dùng
+  được, dù MCP endpoint vẫn trả lời bình thường.
+- Có **hai** cổng phải mở, không phải một: cổng MCP (8765) và cổng audio (8766).
 
-Ô "custom connector" của Claude Desktop chỉ nhận `https`. Một server LAN chạy
-http không điền vào đó được. Bắc cầu trong `claude_desktop_config.json`:
+### 1.2 Bind ≠ địa chỉ quảng bá — hai thứ KHÁC NHAU
 
-```json
-{"mcpServers":{"googlecast":{"command":"npx",
- "args":["-y","mcp-remote","http://192.168.1.128:8765/mcp","--allow-http"]}}}
+`media_server.py:76` bind `0.0.0.0` (nghe trên mọi giao diện), nhưng URL đưa cho
+loa dựng từ `lan_ip()`. Nhầm hai thứ này là hỏng: quảng bá `0.0.0.0` thì loa
+không bao giờ tải được file, mà server vẫn "chạy tốt".
+
+`lan_ip()` học địa chỉ bằng cách mở một socket UDP hướng ra 8.8.8.8 và đọc lại
+giao diện kernel chọn. **Không có gói tin nào được gửi.**
+
+### 1.3 Giữ bảo vệ DNS-rebinding của SDK, chỉ NỚI allowlist
+
+SDK chỉ tin `127.0.0.1`, nên client từ máy khác nhận `421 Misdirected Request`.
+Cách chữa **không phải** tắt kiểm tra — tắt là mở đường cho bất kỳ trang web nào
+người dùng mở tấn công server nội bộ. `__main__.py:46-69` nới danh sách, và
+danh sách đó phải có đủ **bốn dạng**:
+
+| Dạng | Vì sao cần |
+|---|---|
+| `host` trần, không kèm `:port` | reverse proxy ở cổng mặc định (443) không gửi `:port` trong header `Host` |
+| `host:*` | truy cập trực tiếp có cổng |
+| scheme `http` | LAN |
+| scheme `https` | khi có proxy kết thúc TLS phía trước |
+
+Thiếu **một** trong bốn là 421 ở đúng một tình huống, và thông báo lỗi không hề
+nói cho bạn biết thiếu dạng nào.
+
+### 1.4 Tên miền có dấu gạch dưới KHÔNG BAO GIỜ xin được chứng chỉ
+
+CA/Browser Forum cấm ký tự `_` trong tên miền chứng chỉ. `google_cast.example`
+là ngõ cụt tuyệt đối — không phải "khó", mà là **không tồn tại đường đi**. Vì
+Claude Desktop bắt buộc https, dùng gạch dưới là tự chặn mình. Dùng gạch nối:
+`google-cast.adrec.cloud`.
+
+### 1.5 Ghim `mcp[cli]>=1.13,<2`
+
+Trên PyPI có một gói tên `mcp` phiên bản 2.0.0 **hoàn toàn không liên quan** tới
+SDK chính thức; nó kéo theo `httpx2` (dạng typosquat) và `mcp-types`. Cách nhận
+ra bản thật: nó phụ thuộc `httpx`, không phải `httpx2`. Đừng bỏ ghim.
+
+## 2. Cấu hình reverse proxy — hai dòng bắt buộc
+
+Xem `scripts/nginx-googlecast-mcp.conf`. Hai chỉ thị không được thiếu:
+
+```nginx
+proxy_buffering off;         # thiếu → client TREO, KHÔNG có thông báo lỗi nào
+proxy_read_timeout 3600s;    # SSE là kết nối dài
 ```
 
-## Bảo mật — nói thẳng
+Triệu chứng của việc thiếu `proxy_buffering off` là **im lặng**: không log,
+không mã lỗi, client chỉ đứng im. Đó là loại lỗi tốn nhiều giờ nhất.
 
-- **Không có xác thực ở tầng ứng dụng.** Ai gọi được `/mcp` là phát được tiếng
-  trong nhà.
-- `google-cast.adrec.cloud` **phân giải công khai ra internet**. Hai dòng
-  `allow 192.168.0.0/16; deny all;` trong file nginx đã đồng ý bật nhưng vẫn
-  đang comment.
-- Cổng 8766 phục vụ nguyên thư mục cache TTS, không xác thực, và chặn IP ở
-  nginx **không che nó** — nó không đi qua nginx.
-- Bảo vệ DNS-rebinding của SDK vẫn bật. Đừng tắt.
+## 3. CORS cho client trình duyệt
 
-## Triển khai đang chạy thật
+SDK trả `OPTIONS` = **405** và không có header CORS, nên trình duyệt chặn ở bước
+preflight và JavaScript chỉ nhận được `"Failed to fetch"` — không có gì để đọc.
 
-- systemd `googlecast-mcp.service` trên `192.168.1.128`, MCP 8765, audio 8766.
-- nginx vhost `/etc/nginx/conf.d/adrec_cloud.conf`, chứng chỉ Let's Encrypt.
-- Phục vụ Claude Desktop (máy `.28`) qua https, và llama-server webui
-  (`192.168.1.99:8383`) qua CORS.
+`__main__.py:37` gắn `CORSMiddleware`, và **bắt buộc** phải có:
+
+```python
+expose_headers=["Mcp-Session-Id", "mcp-session-id"]
+```
+
+Không expose thì trình duyệt không đọc được session id, và **không duy trì được
+phiên** — mặc dù preflight đã qua. Origin phải khớp **chính xác** chuỗi trên
+thanh địa chỉ, kể cả cổng.
+
+## 4. Vận hành
+
+### 4.1 `systemctl enable --now` KHÔNG khởi động lại service đang chạy
+
+Đây là lý do một bản sửa từng sống trong repo **3 ngày** mà không có tác dụng,
+và người dùng phải nói "vẫn lỗi" ba lần. `scripts/service.sh:78-80` gọi
+`restart` tường minh.
+
+`service.sh status` (dòng 112-115) in `/proc/<MainPID>/cmdline`: **file unit có
+thể khác hẳn dòng lệnh mà tiến trình đang chạy thật.** Luôn đọc dòng đó.
+
+### 4.2 Phân biệt thiết bị treo với lỗi mã nguồn
+
+Thiết bị Cast có thể trả lời mDNS, trả lời ping, mà **từ chối TCP 8009** →
+`wait timed out`. Khởi động lại thiết bị là hết.
 
 ```bash
-MCP_EXTRA_ARGS="--allow-host google-cast.adrec.cloud --json-response --stateless --cors-origin http://192.168.1.99:8383" \
-    ./scripts/service.sh install
+nc -z 192.168.1.31 8009    # chạy cái này TRƯỚC khi nghi ngờ mã nguồn
 ```
 
-## Chẩn đoán theo mã lỗi
+> Bài học suy luận: đã từng kết luận sai rằng "Nest Hub bỏ cổng 8009 do
+> firmware" chỉ vì **cả hai** Nest Hub trong nhà cùng đóng cổng. Hai mẫu trùng
+> nhau không đủ để suy ra nguyên nhân hệ thống.
 
-| Thấy gì | Nghĩa là gì |
+### 4.3 `pkill -f "<mẫu>"` khớp luôn chính shell đang chạy nó
+
+Chuỗi mẫu nằm trong dòng lệnh của shell, nên `pkill -f` tự giết mình (exit 144).
+Lọc theo cổng hoặc PID thay vì theo chuỗi lệnh.
+
+## 5. Triển khai đang chạy thật
+
+| Hạng mục | Giá trị |
 |---|---|
-| `421 Misdirected Request` | Host client dùng chưa có trong allowlist → `--allow-host` |
-| `403` | Origin chưa được phép → `--cors-origin` |
-| `406 Not Acceptable` | Thiếu `Accept: text/event-stream`. Mở bằng trình duyệt ra lỗi này là **đúng**, không phải hỏng |
-| `405` ở preflight, không header | Chưa bật CORS |
-| Client treo, không lỗi | Nginx đang đệm → `proxy_buffering off` |
-| `Failed to fetch (check CORS?)` | Có thể là CORS, cũng có thể do thiếu `expose_headers` |
-| `wait timed out` khi cast | Thiết bị treo. Kiểm `nc -z <ip> 8009` **trước** khi nghi mã nguồn |
-| Sửa rồi mà vẫn y nguyên | Tiến trình cũ còn sống. `service.sh status` xem `/proc/<pid>/cmdline` |
+| Máy | `192.168.1.128`, systemd unit `googlecast-mcp.service` |
+| Cổng MCP / audio | `8765` / `8766` |
+| nginx | `/etc/nginx/conf.d/adrec_cloud.conf`, TLS Let's Encrypt |
+| Tên miền | `google-cast.adrec.cloud` |
+| Client | Claude Desktop (`192.168.1.28`) qua https; llama-server webui (`192.168.1.99:8383`) qua CORS |
+
+```bash
+MCP_EXTRA_ARGS="--allow-host google-cast.adrec.cloud --json-response --stateless \
+  --cors-origin http://192.168.1.99:8383" ./scripts/service.sh install
+```
+
+## 6. ĐIỂM CÒN HỞ — chưa vá, không tô hồng
+
+| # | Vấn đề | Mức | Trạng thái |
+|---|---|---|---|
+| 1 | **Không có xác thực ở tầng ứng dụng.** `google-cast.adrec.cloud` phân giải CÔNG KHAI ra internet. Ai gọi được endpoint là phát được tiếng vào nhà. | Cao | CHƯA VÁ |
+| 2 | **Cổng audio 8766 bind `0.0.0.0`, không xác thực**, phục vụ nguyên thư mục cache TTS. Chặn IP ở nginx chỉ che 8765, **không che 8766**. | Cao | CHƯA VÁ |
+| 3 | Hai dòng chặn IP trong cấu hình nginx đã đồng ý bật nhưng **vẫn đang bị comment**. | Trung bình | CHƯA BẬT |
+| 4 | Cache TTS tăng vô hạn, không có cơ chế dọn. | Thấp | CHƯA VÁ |
+| 5 | Không khôi phục âm lượng / media đang phát sau khi thông báo xong. | Thấp | CHƯA LÀM |
+| 6 | ~~`tts.synthesize` không thử lại~~ — **ĐÃ VÁ.** Nguyên nhân sâu hơn báo cáo ban đầu: chỉ thêm thử lại vẫn hỏng (đo: 4/6 đạt, mất 101s) vì các lần thử vẫn chồng lên nhau và dịch vụ từ chối kết nối. Vá bằng **khoá tuần tự hoá** (`_synthesis_lock`) + thử lại 3 lần có giãn cách. Đo lại: **6/6 đạt, 12s**. | — | Đã vá |
+| 7 | ~~Cache đọng file 0 byte khi `save()` ném lỗi~~ — **ĐÃ VÁ.** Bọc `save()` trong `try/except`, `unlink` trước mỗi lần thử lại. Đo lại sau đợt dồn dập: **0 file 0 byte còn đọng**. | — | Đã vá |
+
+## 7. Chưa từng thử
+
+Ghi ra để người sau không tưởng là đã có bảo chứng:
+
+- Giọng nam `vi-VN-NamMinhNeural` — chưa ai nghe bằng tai.
+- Tham số `rate` — chưa nghe bằng tai (mới chỉ kiểm bằng kích thước file).
+- Service sống sót qua **reboot máy** — đã `enable`, chưa reboot lần nào.
+- Nhánh quét lại khi loa **đổi IP** làm địa chỉ đã lưu bị cũ.
+- Chặn IP ở nginx (xem điểm hở #3).

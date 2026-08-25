@@ -1,83 +1,132 @@
-# Harness spec — 5 lớp
+# Harness spec — googlecast-mcp
 
-Sản phẩm này là **harness vận hành**: đầu ra xác định, đúng/sai kiểm được bằng
-máy. Không có bước nào do AI sinh ra nội dung tự do. Trọng số vì thế dồn về
-lớp Tool và lớp Execution; lớp Eval chấm pass/fail chứ không chấm chất lượng.
+Loại: **harness vận hành** (máy móc, kết quả xác định). Không có bước nào do AI
+sinh ra output tự do, nên eval đo **đúng/sai**, không đo chất lượng.
 
-## 1. Context — LLM biết gì để quyết định
+Trọng số năm lớp cho loại này:
 
-Trọng số: **cao**. Đây là chỗ dễ hỏng nhất của một MCP server, và nó không
-nằm trong mã xử lý mà nằm trong mô tả tool.
+| Lớp | Trọng số | Vì sao |
+|---|---|---|
+| Context | thấp | tool có mô tả rõ; không có prompt phức tạp cần chỉnh |
+| **Tool** | **cao** | 13 tool là toàn bộ bề mặt hợp đồng |
+| **Execution** | **cao** | tác dụng phụ VẬT LÝ — phát tiếng trong nhà |
+| **Eval** | **cao** | phần lớn hành vi phải kiểm được mà không phát tiếng |
+| Feedback | trung bình | lỗi phải nói được nguyên nhân cho người vận hành |
 
-- 13 tool, mỗi tool có docstring viết cho LLM đọc, không phải cho lập trình
-  viên. Đã kiểm: mọi tool đều có description.
-- `say` **không** đặt `target` vào `required`. Đây là quyết định thiết kế, có
-  test riêng: nếu bắt buộc, LLM sẽ tự bịa một tên loa thay vì hỏi lại.
-- Khi thiếu `target`, server trả về cả `speakers` (dữ liệu) lẫn `message` (lời
-  chỉ dẫn hành động). LLM cần cả hai mới hỏi lại đúng được.
-- `list_speakers` tự quét một lần nếu chưa biết gì, để LLM không phải học một
-  thứ tự gọi bắt buộc.
-- Trạng thái bền: `~/.googlecast-mcp/speakers.json`. Tiến trình khởi động lại
-  vẫn biết trong nhà có loa nào.
+---
 
-## 2. Tool — bề mặt gọi được
+## Lớp 1 — Context
 
-Trọng số: **cao**.
+Trợ lý chỉ có mô tả tool để hành động. Ba điều mô tả phải nói rõ:
 
-| Nhóm | Tool |
+1. **Chạy `discover_devices` trước** — nói thẳng trong docstring.
+2. **Bỏ `target` thì KHÔNG phát gì** — nói thẳng, để LLM không tưởng là mặc
+   định phát tất cả.
+3. **Các dạng `target`** — một tên, nhiều tên cách phẩy, hoặc `all`.
+
+Kiểm: mọi tool có `description` khác rỗng; `say` có đúng `text` là bắt buộc.
+
+## Lớp 2 — Tool
+
+Hợp đồng: **đúng 13 tool, đúng 13 cái tên đó.**
+
+Bài kiểm so **TẬP** với `EXPECTED_TOOLS`, không so số lượng. Kiểm ngược đã gieo
+đúng lỗi bẫy: đổi tên `quit_app` → `quit_application`. **Số lượng không đổi**,
+nên một bài kiểm đếm sẽ vẫn xanh. Bài kiểm so tập thì đỏ.
+
+Ranh giới đầu vào phải giữ:
+
+| Tool | Ranh giới |
 |---|---|
-| Khám phá | `discover_devices`, `list_devices`, `list_speakers` |
-| Nói | `say` |
-| Media | `play_media`, `play`, `pause`, `stop`, `seek` |
-| Thiết bị | `get_status`, `set_volume`, `set_muted`, `quit_app` |
+| `say` | `text` rỗng/toàn khoảng trắng → `ValueError`, **không gọi mạng** |
+| `say` | `target` rỗng → `needs_speaker_selection` |
+| `set_volume` | ngoài `[0,1]` bị kẹp, không lọt xuống thiết bị |
+| `play_media` | thiếu `content_type` → đoán từ đuôi URL |
 
-Hợp đồng phải giữ:
-- `say` không có `target` → **không tác dụng phụ nào cả**. Kiểm bằng tripwire
-  trên cả TTS lẫn cast, không kiểm bằng giá trị trả về.
-- `all` → đúng một lời gọi cho mỗi loa vật lý. Đối chiếu theo `host`.
-- Một loa hỏng → phần tử đó `error`, những loa còn lại vẫn phát, tổng thể `ok`.
-- Mọi lời gọi pychromecast (blocking) đi qua `asyncio.to_thread`.
+## Lớp 3 — Execution
 
-## 3. Execution — chạy ở đâu, ràng buộc gì
+**Đây là lớp quyết định cách phân tầng bộ kiểm.** Sản phẩm có tác dụng phụ vật
+lý: nó phát ra tiếng trong nhà người khác.
 
-Trọng số: **cao**. Phần lớn thời gian của dự án tiêu ở lớp này.
+| Tầng | Cờ | Tác dụng phụ | Chạy được mọi lúc? |
+|---|---|---|---|
+| 1 — offline | *(mặc định)* | mở một cổng HTTP tạm trên máy này, đóng ngay | **Có** |
+| 2 — online | `--online` | gọi edge-tts (Microsoft), tốn hạn ngạch | Cần internet |
+| 3 — hardware | `--hardware` | **PHÁT TIẾNG THẬT** | Chỉ khi đã xin phép |
 
-- Ràng buộc gốc: thiết bị Cast tự đi tải media qua HTTP ⇒ server bắt buộc
-  kiêm HTTP file server. Bind `0.0.0.0`, quảng bá `lan_ip()`. Hai thứ khác nhau.
-- Cùng LAN với loa. mDNS không đi qua router.
-- Cổng cố định 8765 / 8766 khi chạy như service.
-- Allowlist DNS-rebinding được **nới**, không tắt. Phải có host trần và scheme
-  https.
-- CORS chỉ khi client là trình duyệt, và bắt buộc expose `Mcp-Session-Id`.
-- Cài lại phải `restart`, không phải `enable --now`.
+Nguyên tắc: **tầng mặc định phải là tầng không ai ngại chạy.** Một bộ kiểm mà
+không ai dám bấm chạy thì bằng không có.
 
-Chi tiết đầy đủ: `technical-docs.md`.
+Ba tầng phải **cô lập** với nhau:
 
-## 4. Eval — pass/fail
+- Ảnh chụp các thuộc tính bị thay thế được lấy **TRƯỚC tầng đầu tiên**, khôi
+  phục trong `finally`.
+- Mỗi tầng, mỗi mục kiểm dựng **object MỚI**. Không thừa hưởng object của tầng
+  trước dù trông có vẻ sạch.
+- **Không dùng `importlib.reload`.** Nó thay module mới dưới chân chính cái ảnh
+  chụp đang giữ tay nắm, tức là phá luôn đường khôi phục. Đã thử, đã phải loại.
 
-Trọng số: **cao**, nhưng là kiểm đúng-sai, không phải chấm điểm.
+## Lớp 4 — Eval
 
-Ba tầng phân theo tác dụng phụ (offline / `--online` / `--hardware`), cộng một
-vòng kiểm ngược có kỳ vọng viết trước. Toàn bộ ở `eval/README.md`.
+Ba luật, mỗi luật rút từ một lỗi thật đã dính:
 
-Nguyên tắc: eval chưa từng đỏ là eval chưa chứng minh được gì. Vòng kiểm ngược
-đầu tiên đã bắt được một test giả và một cái bẫy bytecode cũ.
+### Luật 1 — So TẬP KỲ VỌNG tường minh, không so kích thước
 
-Chỗ eval **không** với tới được: chất lượng giọng nói, và hiện tượng chồng
-luồng khi nghe. Ghi rõ ở mục CHƯA PHỦ chứ không lấp liếm.
+Dạng test giả phổ biến nhất là **so đếm/độ dài thay cho so tập**.
 
-## 5. Feedback — biết mình sai bằng cách nào
+Ca thật đã dính: `len(hosts) == len(set(hosts))` để kiểm "`all` không phát chồng
+lên một loa". Nó **vẫn xanh** khi `all` sai thành đúng một phần tử — một phần tử
+thì không thể trùng. Bản thay thế so `{(tên, host)}` với `EXPECTED_ALL`.
 
-Trọng số: **trung bình**, nhưng là lớp quyết định tốc độ sửa lỗi.
+Cách tự soát: mọi mục kiểm dạng `len(...)`, `count`, `>=` phải trả lời được câu
+"có hình dạng SAI nào khiến con số này vẫn đúng không?".
 
-- Mã lỗi HTTP là chẩn đoán, không phải phiền toái: 421 = allowlist, 403 =
-  origin, 406 = thiếu Accept (và là **đúng**), 405 không header = chưa CORS.
-- `service.sh status` in `/proc/<pid>/cmdline`: phân biệt "bản sửa sai" với
-  "bản sửa chưa được nạp".
-- `nc -z <ip> 8009` trước khi nghi mã nguồn: phân biệt thiết bị treo với hồi quy.
-- Tín hiệu ở phía con người: người dùng lặp lại *"vẫn báo lổi"* mà không thêm
-  thông tin mới nghĩa là **đang sửa sai hướng** — dừng lại, kiểm bản sửa đã
-  được nạp chưa. Ở phiên gốc tín hiệu này đã bị bỏ lỡ một vòng.
-- Có những lỗi không lớp nào bắt được: `all` chồng luồng, cả bốn lời gọi đều
-  trả `playing`. Chỉ tai người phát hiện ra. Với sản phẩm có tác dụng phụ vật
-  lý, phải chừa sẵn một chỗ cho con người nghiệm thu.
+### Luật 2 — Eval phải từng ĐỎ, với kỳ vọng khai TRƯỚC
+
+`reverse-check.py` gieo 12 lỗi + 1 đối chứng vô hại. Mỗi lỗi khai trước danh
+sách mục **lẽ ra phải đỏ**. Sau khi chạy:
+
+- lẽ-ra-đỏ-mà-xanh → **TEST GIẢ**, phải sửa bài kiểm hoặc ghi **CHƯA PHỦ**;
+- đối chứng vô hại mà làm đỏ → bài kiểm đang bám vào thứ không phải hành vi.
+
+### Luật 3 — Hoàn nguyên = CHẠY LẠI EVAL THẤY XANH
+
+**`git status` sạch KHÔNG phải bằng chứng hoàn nguyên.** Một lỗi gieo vào dài
+đúng bằng bản gốc để lại `.pyc` cũ: git thấy sạch mà eval vẫn đỏ. Quy trình
+đúng: khôi phục → **xoá `__pycache__`** → chạy lại eval → đòi thấy XANH.
+
+### Luật 4 — Khẳng định bất đồng bộ phải có MỐC CHỜ
+
+Mọi khẳng định chạm mạng/thiết bị phải đi kèm timeout + điều kiện thoả, qua
+`wait_until()`.
+
+Ca thật đã dính: đọc `player_state` ngay khoảnh khắc `play_media` trả về. Hàm đó
+chỉ chờ **ứng dụng trên thiết bị khởi động**, chưa chờ nó **phát** → FAIL
+`Kitchen speaker reports IDLE` dù loa hoàn toàn tốt. Không có mốc chờ nghĩa là
+đang đo tốc độ mạng chứ không đo hành vi.
+
+## Lớp 5 — Feedback
+
+Lỗi phải nói được **nguyên nhân**, vì người đọc nó là người đang sửa mạng nhà
+mình lúc 11 giờ đêm:
+
+| Tình huống | Thông điệp phải chứa |
+|---|---|
+| Không tìm thấy thiết bị | tên đã gõ **và** danh sách tên đang biết |
+| Một loa hỏng trong lượt nhiều loa | mục `error` **riêng cho loa đó**, các loa khác vẫn `playing` |
+| Thiếu chọn loa | danh sách loa **và** lời hướng dẫn LLM hỏi lại |
+| Không có loa nào | phân biệt rõ với "thiếu chọn loa" (`no_speakers_found`) |
+
+Đây là lý do `_select_targets` trả về hai trạng thái khác nhau chứ không gộp
+một: "chưa chọn" và "không có gì để chọn" cần hai hành động khác nhau.
+
+---
+
+## Điều harness này CỐ Ý không phủ
+
+- **Chất lượng giọng đọc.** Không đo được bằng máy. Bắt buộc người nghe.
+- **Tiếng chồng luồng.** API báo `playing` cho mọi đích; chỉ tai người nghe ra.
+  Bài kiểm chốt được *quy tắc chọn đích* (qua dấu vết trùng `host`), nhưng
+  không chốt được *âm thanh thật sự phát ra*.
+- **nginx / TLS.** Eval kiểm allowlist mà tiến trình sinh ra, không dựng nginx.
+- **Nhánh `_connect_saved` thành công.** Cần thiết bị Cast thật.

@@ -8,6 +8,7 @@ so repeating the same announcement does not re-synthesize it.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import tempfile
@@ -21,6 +22,10 @@ VOICES = {
     "male": "vi-VN-NamMinhNeural",
 }
 DEFAULT_VOICE = VOICES["female"]
+
+# Renders run one at a time: the upstream service refuses connections that
+# arrive together, and a fan-out of announcements would otherwise mostly fail.
+_synthesis_lock = asyncio.Lock()
 
 
 def resolve_voice(voice: str | None) -> str:
@@ -66,9 +71,31 @@ async def synthesize(
     if path.exists() and path.stat().st_size > 0:
         return path
 
-    communicate = edge_tts.Communicate(text, resolved, rate=rate, volume=volume)
-    await communicate.save(str(path))
-    if not path.exists() or path.stat().st_size == 0:
-        path.unlink(missing_ok=True)
-        raise RuntimeError(f"TTS produced no audio for voice {resolved!r}")
-    return path
+    # The service refuses connections that arrive together, so retrying alone
+    # is not enough — the attempts have to stop overlapping. One at a time,
+    # then back off between attempts. A partial file is always cleared first,
+    # since save() can create the file and then fail, leaving an empty one.
+    async with _synthesis_lock:
+        # Another caller may have rendered it while we waited for the lock.
+        if path.exists() and path.stat().st_size > 0:
+            return path
+
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(2 * attempt)
+            communicate = edge_tts.Communicate(text, resolved, rate=rate, volume=volume)
+            try:
+                await communicate.save(str(path))
+            except Exception as exc:  # noqa: BLE001 - the library raises several types
+                last_error = exc
+                path.unlink(missing_ok=True)
+                continue
+            if path.exists() and path.stat().st_size > 0:
+                return path
+            path.unlink(missing_ok=True)
+            last_error = RuntimeError(f"TTS produced no audio for voice {resolved!r}")
+
+    raise RuntimeError(
+        f"TTS failed for voice {resolved!r} after 3 attempts: {last_error}"
+    ) from last_error

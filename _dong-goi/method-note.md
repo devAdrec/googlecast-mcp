@@ -1,48 +1,86 @@
 ---
 product: googlecast-mcp
-loại: MCP server (harness vận hành)
-đóng gói: 2026-08-24
-transmission_level: L2
+loai: harness vận hành (MCP server, systemd service)
+ngay: 2026-08-25
+transmission_level: L2 (chấm độc lập bởi người đọc sạch, 2026-08-25)
+package: _dong-goi/package/
 ---
 
-# Cách xây googlecast-mcp — ghi chép phương pháp
+# Cách đã dựng googlecast-mcp
 
-Sản phẩm: một MCP server để nói tiếng Việt ra loa Google trong nhà. Ghi chép
-này không dạy dùng nó (xem `package/user-manual.md`), cũng không dạy dựng lại
-đúng nó (xem `reproduction-prompt.md`). Nó ghi **cách nghĩ** — để xây được một
-cái khác.
+Một MCP server để trợ lý AI **nói tiếng Việt ra loa Google** trong nhà. Ghi lại
+**cách nghĩ**, không phải nhật ký công việc.
+
+Ba lớp tài sản, đừng lẫn:
+
+| Lớp | Là gì | Ở đâu |
+|---|---|---|
+| Output | sản phẩm chạy được + bộ 4 tài liệu bàn giao | `_dong-goi/package/` |
+| Reproduction | prompt dựng lại đúng sản phẩm này | `_dong-goi/reproduction-prompt.md` |
+| **Method** | cách nghĩ, để xây **cái khác** | file này |
 
 ---
 
 ## Bài học 30 giây
 
-1. **Đưa yêu cầu thành danh sách đánh số, viết bằng hành vi.** Ba dòng đánh
-   số của người dùng sinh ra toàn bộ sản phẩm. Mọi câu chữ khác trong phiên
-   chỉ là dán lỗi vào.
-2. **Dựng bản chạy được trước, rồi đối chiếu yêu cầu để lộ chỗ thiếu.** Mỗi
-   chỗ thiếu thành một module. Đừng thiết kế trọn gói từ đầu.
-3. **Chỉ so sánh phương án khi con người phải cảm nhận được sự khác nhau.**
-   Thành phần xương sống thì chọn theo mức bảo trì, không cần so.
-4. **Việc gì có tác dụng phụ ngoài đời thì đừng đoán hộ người dùng.** Thiếu
-   thông tin thì hỏi lại, đừng chọn mặc định "làm tất".
-5. **Người dùng lặp lại "vẫn lỗi" mà không có thông tin mới = đang sửa sai
-   hướng.** Dừng sửa. Kiểm bản sửa đã được nạp chưa.
-6. **Hai mẫu trùng nhau không đủ để kết luận nguyên nhân.** Và một kiểm chứng
-   xanh chưa chứng minh gì cho tới khi bạn thấy nó đỏ đúng lúc phải đỏ.
+Mục này là **mục lục**, không phải bản tóm tắt độc lập — mỗi dòng trỏ tới
+bước nói kỹ. Cố ý để mỗi ý chỉ được giải thích ở đúng một chỗ.
+
+1. **Dựng bản chạy được trước, rồi ĐỐI CHIẾU yêu cầu để lộ chỗ thiếu.** Danh
+   sách yêu cầu chưa đạt chính là danh sách module cần viết. → Bước 1.
+2. **Chọn công cụ theo loại công cụ, không theo một quy trình chung.** → Bước 2.
+3. **Không biết thì HỎI, đừng đoán** — nhất là khi đoán sai gây hậu quả vật lý.
+   → Bước 3.
+4. **Khi người dùng nói "vẫn lỗi" lần thứ hai với đúng câu chữ cũ: DỪNG SỬA**,
+   đi kiểm bản sửa đã được nạp chưa. → Bước 4.
+5. **Hai mẫu trùng nhau không đủ để kết luận nguyên nhân hệ thống.** → bảng
+   "Ngõ cụt", mục #7.
+6. **Bài kiểm chưa từng ĐỎ là bài kiểm chưa chứng minh được gì.** → Bước 7,
+   bốn luật.
+7. **Kiểm một lần rồi kết luận là ngõ cụt.** Giữ **lịch sử đo** mới phân định
+   được lỗi thiết bị với hồi quy mã nguồn. → Bước 4 và "Cách đã kiểm chứng".
 
 ---
 
-## Bước 1 — Biến lời kể thành danh sách đối chiếu được
+## Bước 1 — Đối chiếu yêu cầu để tìm ra việc phải làm
 
-**Nguyên tắc.** Một sản phẩm chỉ bắt đầu tồn tại khi yêu cầu viết được thành
-những câu kiểm được đúng/sai. Trước đó bạn đang đoán.
+**Nguyên tắc.** Không thiết kế từ đầu cho hoàn hảo. Dựng một bản chạy được, đưa
+yêu cầu của người dùng ra đối chiếu từng câu, và **mỗi câu chưa đạt trở thành
+một module**.
 
-**Việc làm cụ thể.** Ở phiên gốc đã có sẵn một scaffold từ phiên trước — 11
-tool điều khiển Cast chung chung, chưa có TTS. Người dùng không mô tả kiến
-trúc, không nói cần module nào. Họ đưa ba dòng đánh số. Việc đầu tiên là lấy
-ba dòng đó **đối chiếu ngược** với thứ đang có.
+**Việc làm cụ thể.** Lúc bắt đầu đã có sẵn scaffold từ phiên trước: 11 tool điều
+khiển Cast chung chung, **chưa có đọc chữ thành tiếng**. Người dùng không viết
+đặc tả — họ gõ ba câu đánh số. Đối chiếu ra **đạt 1/3**:
 
-**Prompt mẫu thật** (nguyên văn, giữ nguyên lỗi gõ):
+| Yêu cầu | Trạng thái | Module sinh ra |
+|---|---|---|
+| 1. Dò loa trong LAN rồi lưu lại | một nửa (dò được, chưa lưu, chưa lọc loa) | `speaker_store.py` |
+| 2. Text → tiếng Việt → phát ra loa | **chưa có gì** | `tts.py`, `media_server.py` |
+| 3. Không chọn loa thì hỏi lại | **chưa có gì** | `say()` + `_select_targets()` |
+
+`cast_manager.py` giữ nguyên — nó đã đúng việc.
+
+**"Bản chạy được" tối thiểu là gì.** Không phải bản có tính năng. Là bản **kết
+nối được và liệt kê được thiết bị** — đủ để chứng minh bạn nói chuyện được với
+phần cứng, và đủ để đối chiếu yêu cầu lên nó. Với sản phẩm này, bản đó đã có sẵn
+từ phiên trước (11 tool điều khiển Cast). Nếu bạn bắt đầu từ số 0, hãy dựng đúng
+chừng đó trước rồi mới sang bước đối chiếu.
+
+**Prompt mẫu** *(tái dựng — dùng cho sản phẩm bất kỳ, đây là câu bạn gõ)*:
+
+```
+Đây là N yêu cầu người dùng viết, đánh số:
+<dán nguyên văn, giữ nguyên lỗi gõ>
+
+Đọc mã nguồn hiện có rồi trả về một bảng, KHÔNG sửa gì cả:
+  yêu cầu | trạng thái (đủ / một nửa / chưa có) | bằng chứng trong mã | module phải viết
+
+Với mỗi yêu cầu "một nửa", nói rõ NỬA NÀO đang thiếu.
+Cuối cùng: phần nào của mã hiện có đã đúng việc và KHÔNG nên đụng vào?
+```
+
+**Prompt gốc của người dùng** (nguyên văn, giữ nguyên lỗi gõ) — thứ đã sinh ra
+toàn bộ sản phẩm:
 
 ```
 hãy kiểm tra xem mcp này đúng yêu cầu không:
@@ -51,469 +89,415 @@ hãy kiểm tra xem mcp này đúng yêu cầu không:
 3. nếu user không chọn speaker sẽ hỏi user xem phát ở speaker nào, hoặc tất cả
 ```
 
-**Quyết định chốt.** Kết quả đối chiếu: **đạt 1/3**, mà cái "đạt" cũng hỏng —
-dò được thiết bị nhưng chỉ cache trong RAM, restart là mất, trong khi yêu cầu
-ghi rõ "sau đó **lưu lại**".
+**Quyết định chốt.** Câu prompt này sinh ra toàn bộ sản phẩm, và nó có hai đặc
+điểm đáng học: **yêu cầu được ĐÁNH SỐ**, và **diễn đạt bằng HÀNH VI quan sát
+được** ("phát lên speaker", "sẽ hỏi user"). Đánh số cho phép đối chiếu từng
+mục; diễn đạt bằng hành vi cho phép biến thẳng thành tiêu chí nghiệm thu. Một
+câu như "làm cho nó hỗ trợ tiếng Việt tốt hơn" thì không làm được gì cả.
 
-🔧 Danh sách chưa đạt **chính là danh sách module cần viết**:
-
-| Yêu cầu hụt | Module sinh ra |
-|---|---|
-| "lưu lại" | `speaker_store.py` |
-| "chuyển thành âm thanh tiếng Việt" | `tts.py` |
-| "phát lên speaker" | `media_server.py` |
-| "không chọn thì hỏi" | `say()` + `_select_targets()` |
-
-`cast_manager.py` giữ nguyên không sửa: nó đã làm đúng việc của nó. Phần
-thiếu nằm ở tầng trên nó.
-
-**Điều đáng học rộng ra:** đừng thiết kế trọn gói từ đầu. Dựng một bản chạy
-được, rồi để danh sách yêu cầu chỉ ra chỗ hổng. Chỗ hổng tự nó phân module,
-và phân đúng hơn là ngồi vẽ sơ đồ trước.
-
-**Nếu bạn bắt đầu từ số 0** (phiên gốc đã có sẵn scaffold từ phiên trước, nên
-không có prompt thật cho bước này — đây là prompt tái dựng):
-
-```
-Dựng một MCP server Python tối thiểu nhưng CHẠY ĐƯỢC cho <thiết bị/dịch vụ X>:
-dùng <thư viện>, bọc mỗi thao tác cơ bản thành một tool, chạy được transport
-stdio. Chưa cần đúng đủ yêu cầu của tôi — tôi cần một bản chạy được để đối
-chiếu ngược. Xong thì liệt kê các tool bạn đã tạo.
-```
-
-Rồi mới đưa danh sách yêu cầu đánh số vào và bảo nó đối chiếu. Thứ tự này quan
-trọng: đối chiếu với một thứ có thật cho ra danh sách module cụ thể; đối chiếu
-với một bản thiết kế tưởng tượng chỉ cho ra một bản thiết kế khác.
+🔧 Ba yêu cầu này về sau thành bảng tiêu chí chấp nhận trong
+`package/requirement.md` — gần như không phải viết lại.
 
 ---
 
-## Bước 2 — Chọn thư viện: chỉ so sánh khi con người cảm nhận được
+## Bước 2 — Chọn công cụ: hai loại, hai cách chọn
 
-**Nguyên tắc.** So sánh phương án tốn thời gian. Chỉ đáng bỏ ra khi khác biệt
-là thứ con người sẽ nhận ra và phàn nàn. Còn lại thì chọn theo tiêu chí khô
-khan và đi tiếp.
+**Nguyên tắc.** Cách chọn phụ thuộc vào **loại thành phần**, không phải một quy
+trình so sánh chung áp lên tất cả.
 
-**Việc làm cụ thể — hai loại thành phần, hai cách chọn khác hẳn nhau:**
-
-*Loại cảm nhận được* — giọng nói. Người dùng sẽ nghe nó mỗi ngày. Đã so bốn
-phương án:
-
-| Phương án | Kết luận |
-|---|---|
-| gTTS | giọng máy móc |
-| Google Cloud TTS | cần key, có phí |
-| Piper | chạy offline nhưng yếu, setup nặng |
-| **edge-tts** | **tự nhiên nhất, miễn phí, không cần key** |
-
-Tiêu chí kỹ thuật (phí, key, độ nặng) thì tự chấm được. Tiêu chí "nghe có tự
-nhiên không" **bắt buộc để người dùng nghe** — không ai chấm hộ được. Và chỉ
-**một vòng**, không lặp: so bốn phương án, người dùng nghe, chốt, đi tiếp.
-
-*Loại xương sống* — giao thức Cast. `pychromecast` **không qua so sánh nào
-cả**. Nó là thư viện Python duy nhất còn được bảo trì cho giao thức này. So
-sánh ở đây là diễn kịch.
-
-**Prompt mẫu thật** (tái dựng — khuôn dùng được cho bài khác):
-
-```
-Liệt kê các thư viện <việc cần làm> còn được bảo trì. Với mỗi cái ghi: lần
-cập nhật gần nhất, có cần API key không, có phí không, độ nặng khi setup.
-Rồi tách rõ hai nhóm tiêu chí: (a) tiêu chí bạn tự chấm được bằng dữ liệu,
-(b) tiêu chí BẮT BUỘC tôi phải tự kiểm bằng giác quan.
-Nếu chỉ còn đúng một thư viện còn bảo trì thì nói thẳng, đừng bày ra bảng so
-sánh cho có.
-```
-
-Câu cuối là câu đáng giá nhất: nó cho phép AI trả lời "không có gì để so".
-
-**Quyết định chốt.** edge-tts với `vi-VN-HoaiMyNeural` (nữ) và
-`vi-VN-NamMinhNeural` (nam). pychromecast, không bàn.
-
-🔧 Có một quyết định thứ ba đắt hơn cả hai: **ghim `mcp[cli]>=1.13,<2`**. Trên
-PyPI có một gói tên `mcp` phiên bản 2.0.0 **hoàn toàn không liên quan**, kéo
-theo `httpx2` (một cái tên typosquat) và `mcp-types`. Cài nhầm thì import fail
-theo kiểu chẳng gợi ý gì. Bài học chung: khi một cái tên gói quá chung chung,
-kiểm xem nó có kéo theo đúng những thứ bạn mong đợi không, rồi ghim lại.
-
----
-
-## Bước 3 — Thiết kế xung quanh ràng buộc gốc, đừng thiết kế quanh mong muốn
-
-**Nguyên tắc.** Trong mỗi bài toán có một sự thật vật lý không thương lượng
-được. Tìm ra nó trước, rồi để mọi thứ khác xếp theo. Thiết kế đẹp mà chống lại
-nó thì sẽ phải đập đi.
-
-**Cách tìm ra nó** — đây mới là phần chuyển giao được, vì ràng buộc của bài
-bạn sẽ khác. Hỏi một câu kiểm được:
-
-```
-Để <hành động đích> xảy ra, thiết bị/dịch vụ đích phải TỰ làm gì? Nó nhận đầu
-vào ở dạng nào, và nó lấy đầu vào đó từ đâu — tôi đẩy sang, hay nó tự đi lấy?
-Nếu nó tự đi lấy thì nó cần với tới cái gì, và điều đó buộc máy của tôi phải
-có tính chất gì?
-```
-
-Câu chốt là **"tôi đẩy sang, hay nó tự đi lấy?"**. Trả lời "nó tự đi lấy" là
-lập tức lòi ra một server, một địa chỉ, một cổng, và một mặt bảo mật.
-
-Cùng câu hỏi đó cho vài bài khác: đèn Hue → mọi lệnh phải qua bridge, mà bridge
-đòi bấm nút vật lý để cấp API key ⇒ có một bước đăng ký thiết bị mà **con người
-phải có mặt**, không tự động hoá được. Máy in → phải qua hàng đợi của hệ điều
-hành. Chuông cửa → nó gọi ngược về bạn bằng webhook, không phải bạn hỏi nó.
-
-**Việc làm cụ thể.** Ràng buộc gốc ở đây: **thiết bị Cast tự đi tải media qua
-HTTP; nó không đọc được đường dẫn file trên máy bạn.**
-
-Nghe thì nhỏ. Hệ quả thì kéo dài cả dự án:
-
-- Một server "nói được" **bắt buộc** kiêm luôn một HTTP file server.
-- Máy chạy nó phải cùng LAN với loa — không phải cho tiện, mà vì loa phải với
-  tới được nó, và mDNS không đi qua router.
-- Sinh ra một cổng thứ hai (8766) phải cố định để viết được luật tường lửa.
-- Sinh ra nguyên một mặt bảo mật: cổng đó phục vụ không xác thực.
-
-🔧 Chỗ tinh tế nhất, và cũng là chỗ hay nhầm nhất: `media_server.py:76` bind
-`0.0.0.0`, còn URL quảng bá cho loa dựng từ `lan_ip()`. **Hai thứ khác nhau.**
-Bind rộng để loa nào cũng tới được; URL phải là một địa chỉ cụ thể vì loa cần
-một địa chỉ để gọi. Lẫn hai thứ này là ra một bug rất khó nhìn.
-
-**Quyết định chốt.** Chấp nhận cấu trúc hai cổng ngay từ đầu thay vì tìm cách
-né. Không có cách né.
-
----
-
-## Bước 4 — Tác dụng phụ vật lý thì hỏi, đừng đoán
-
-**Nguyên tắc.** Khi một hành động gây ra hậu quả ngoài đời — phát ra tiếng,
-tiêu tiền, gửi tin đi — thì thiếu thông tin phải hỏi. Mặc định "làm tất" là
-một mặc định tồi, vì cái giá của đoán sai không đối xứng.
-
-**Việc làm cụ thể.** Yêu cầu #3 nói: không chọn loa thì hỏi. Có ba cách:
-
-| Cách | Vì sao loại / chọn |
-|---|---|
-| MCP elicitation | loại — nhiều client chưa hỗ trợ |
-| mặc định phát tất cả | loại — tác dụng phụ vật lý, đoán sai thì cả nhà nghe |
-| **trả dữ liệu cho LLM tự hỏi lại** | **chọn — chạy với mọi client** |
-
-**Prompt mẫu thật** (nguyên văn) — chính là dòng thứ ba của yêu cầu gốc:
-
-```
-3. nếu user không chọn speaker sẽ hỏi user xem phát ở speaker nào, hoặc tất cả
-```
-
-**Quyết định chốt.** Thiếu `target` → trả về `status:
-"needs_speaker_selection"`, kèm **cả** danh sách loa (dữ liệu) **lẫn** một câu
-chỉ dẫn hành động cho LLM. Không tổng hợp âm thanh, không gửi lệnh nào đi.
-
-Nguyên tắc này áp cho **cả hai chiều**, không chỉ chiều xuất. Chiều nhập —
-đăng ký thiết bị, cấp quyền, ghép đôi — cũng là tác dụng phụ vật lý: bridge
-Hue đòi bấm nút trên vỏ máy, loa đòi ở cùng LAN. Ở những bước đó phải chừa chỗ
-cho con người có mặt, đừng thiết kế như thể tự động hoá được.
-
-🔧 Cách kiểm điều này quan trọng hơn bản thân nó: eval **không** kiểm bằng giá
-trị trả về. Nó cắm tripwire vào cả `tts.synthesize` lẫn `play_media`; hàm nào
-bị gọi là đỏ ngay. Vì câu cần chứng minh không phải "trả về đúng chữ" mà là
-"**không có gì xảy ra cả**". Muốn kiểm một điều-không-xảy-ra thì phải bẫy
-đường đi, không thể nhìn kết quả.
-
----
-
-## Bước 5 — Đọc tín hiệu từ người dùng
-
-**Nguyên tắc.** Không phải câu nào của người dùng cũng cùng loại. Nhận sai
-loại là làm sai việc.
-
-**Việc làm cụ thể.** Cả phiên gốc có 21 lượt. Chúng rơi vào ba nhóm rất khác
-nhau:
-
-*Nhóm sinh ra sản phẩm* — đánh số, diễn đạt bằng hành vi. Chỉ có một:
-prompt #3. Nó sinh ra toàn bộ chức năng chính.
-
-*Nhóm dán lỗi vào* — người dùng chỉ đưa triệu chứng, chẩn đoán **hoàn toàn
-thuộc về AI**:
-
-```
-URL must start with 'https'
-https://google-cast.adrec.cloud/mcp kết quả là {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Not Acceptable: Client must accept text/event-stream"}}
-mcp này tôi chạy khi kết nối với mcp llama-server thì báo lổi: protocal error
-```
-
-*Nhóm tín hiệu cảnh báo* — quan trọng nhất, và cũng dễ bỏ lỡ nhất.
-
-**Quyết định chốt — cái tín hiệu cần nhận ra:** người dùng nói *"vẫn báo
-lổi"*, rồi lượt sau lại *"vẫn báo lổi:"*. **Lặp lại mà không có thông tin mới
-nghĩa là đang sửa sai hướng.** Đúng cách xử lý: dừng sửa, kiểm xem bản sửa đã
-thật sự được nạp chưa. Ở phiên gốc, tín hiệu này **đã bị bỏ lỡ một vòng** —
-mất thêm một lượt sửa vô ích mới nhận ra.
-
-Đây là tín hiệu **cần nhận ra ở phía người dùng**, không phải một câu để bạn
-đi gõ cho AI.
-
-Hai chi tiết nữa của lớp này:
-
-- Có lượt lạc đề mà gấp nhất phiên: người dùng hỏi vì sao `sudo` báo sai mật
-  khẩu. Lần theo ra `pam_exec` gọi một binary chạy dưới quyền root đang thu
-  mật khẩu. Không liên quan gì tới MCP, nhưng phải xử ngay. **Đừng gạt câu
-  lạc đề chỉ vì nó lạc đề.**
-- Hai lượt mâu thuẫn về cùng một thiết bị: một lượt nói đã nghe được, một lượt
-  sau nói "đèn nháy rồi tắt, không phát đầy đủ". **Giữ lịch sử đo mới phân
-  định được** đó là lỗi thiết bị hay hồi quy mã nguồn.
-
----
-
-## Bước 6 — Chẩn đoán hạ tầng: đọc mã lỗi như một manh mối
-
-**Nguyên tắc.** Trong hạ tầng mạng, mã lỗi không phải phiền toái — nó là chẩn
-đoán. Sai lầm là bịt lỗi thay vì đọc nó.
-
-**Việc làm cụ thể.** 🔧 Bảng thu được sau khi lần lượt vấp từng cái. Bốn hàng
-đầu là **đặc thù MCP-over-HTTP**, chép sang bài khác không dùng được; hai hàng
-cuối (`Failed to fetch` và "sửa rồi mà không đổi gì") là **chung cho mọi hệ**
-có trình duyệt hoặc có tiến trình nền:
-
-| Triệu chứng | Nguyên nhân thật | Cách thoát |
+| Loại thành phần | Cách chọn | Ai quyết |
 |---|---|---|
-| `421 Misdirected Request` | SDK chỉ tin `127.0.0.1`; bind `0.0.0.0` **không** đủ | Nới allowlist, kể cả **host trần không kèm port** và scheme **https** |
-| Client treo, **không báo gì** | nginx đang đệm phản hồi streaming | `proxy_buffering off` + `proxy_read_timeout 3600s` |
-| Không xin được chứng chỉ | Tên miền có gạch dưới. CA/B Forum **cấm** `_` | Đổi sang `google-cast.adrec.cloud`. **Không có cách vòng** |
-| Claude Desktop không nhận URL | Ô connector chỉ nhận https | Bắc cầu `mcp-remote ... --allow-http` |
-| `Failed to fetch (check CORS?)` | `OPTIONS` trả 405, không header CORS; JS chỉ thấy lỗi rỗng | `CORSMiddleware`, **bắt buộc** expose `Mcp-Session-Id` |
-| Sửa rồi mà không đổi gì | `enable --now` **không** restart service đang chạy | `restart` tường minh + in `/proc/<pid>/cmdline` |
+| Người dùng **cảm nhận được** (giọng đọc, giao diện) | bày ra vài phương án, bắt họ **nghe/nhìn thật** | người dùng |
+| **Xương sống** (thư viện giao thức, runtime) | chọn theo mức bảo trì + độ phủ giao thức | kỹ thuật |
 
-**Quyết định chốt quan trọng nhất của bước này:** khi gặp 421, cám dỗ là tắt
-bảo vệ DNS-rebinding của SDK. **Không tắt.** Chỉ nới allowlist. Tắt là mở cửa
-cho một trang web bất kỳ tấn công server nội bộ qua trình duyệt của bạn. Sửa
-một lỗi mà mở ra một lỗ là chưa sửa.
+**Việc làm cụ thể — thành phần cảm nhận được (giọng đọc).** Bày 4 phương án với
+tiêu chí kỹ thuật tự chấm sẵn, để **một tiêu chí duy nhất cho người dùng**: nghe
+có tự nhiên không.
 
-🔧 Cái giá của lỗi cuối bảng: tiến trình cũ sống **ba ngày**, người dùng phải
-nói "vẫn lỗi" ba lần. Từ đó `service.sh status` in luôn dòng lệnh của tiến
-trình đang chạy thật — để lần sau phân biệt được ngay "bản sửa sai" với "bản
-sửa chưa được nạp".
-
----
-
-## Bước 7 — Suy luận: đừng kết luận nguyên nhân từ hai mẫu
-
-**Nguyên tắc.** Hai thứ cùng hỏng theo cùng một kiểu **không** đủ để kết luận
-một nguyên nhân hệ thống. Đó vẫn chỉ là hai mẫu.
-
-**Việc làm cụ thể.** Cả hai Nest Hub trong nhà đều đóng cổng 8009. Kết luận
-rút ra lúc đó: *"Nest Hub đã bỏ cổng 8009 do firmware mới"* — nghe rất hợp lý,
-khớp cả hai mẫu, và **sai**.
-
-Sự thật: thiết bị bị treo. mDNS vẫn trả lời, ping vẫn thông, nhưng TCP 8009
-refuse. Restart thiết bị là hết.
-
-**Quyết định chốt.** Thêm một bước đo **trước** khi nghi mã nguồn:
-
-```bash
-nc -z <ip> 8009
-```
-
-Một dòng, phân định ngay "thiết bị treo" với "mã nguồn hồi quy". Quy tắc rộng
-ra: trước khi kết luận nguyên nhân hệ thống, tìm một phép đo **rẻ** phân biệt
-được hai giả thuyết — đừng chọn giả thuyết nghe hay hơn.
-
-🔧 Một cái bẫy cùng họ, phải trả giá bằng một shell bị giết: `pkill -f
-"<pattern>"` khớp luôn chính lệnh bash đang chạy chứa pattern đó, và tự giết
-mình (exit 144).
-
----
-
-## Bước 8 — Lỗi mà API không thấy được
-
-**Nguyên tắc.** Với sản phẩm có tác dụng phụ vật lý, phải chừa sẵn một chỗ cho
-con người nghiệm thu. Có những lỗi không mã nào phát hiện được.
-
-**Việc làm cụ thể.** `target="all"` gửi tới **cả nhóm loa lẫn từng thành
-viên**. Nhóm Cast phát *qua* các thành viên của nó, nên `Family speaker group`
-và `Kitchen speaker` — cùng địa chỉ `192.168.1.22` — khiến một loa vật lý nhận
-**hai luồng cùng lúc**.
-
-**Cả bốn lời gọi đều trả `playing`.** Không có mã lỗi, không có cảnh báo, trạng
-thái hoàn toàn khoẻ mạnh. Chỉ khi có người nghe thấy tiếng vọng lệch pha thì
-lỗi mới lộ.
-
-**Quyết định chốt.** `all` bỏ qua `cast_type=group`. Nhóm vẫn gọi được bằng
-tên nếu ai đó muốn.
-
-🔧 Và đây là chỗ dễ viết ra một test giả: kiểm *"`all` không chứa tên nhóm"*
-là kiểm cái tên, không kiểm cái hại. Cái hại là **hai luồng vào một loa vật
-lý**, và loa vật lý nhận diện bằng **`host`**, không bằng tên. Nên phép kiểm
-phải đối chiếu theo `host`.
-
-**Bài học rộng:** khi API báo khoẻ mà người dùng nói không ổn, tin người dùng.
-Và đưa lỗi đó vào eval theo **đúng cái đại lượng gây hại**, không theo cái đại
-lượng dễ viết.
-
----
-
-## Bước 9 — Eval chưa từng đỏ là eval chưa chứng minh gì
-
-**Nguyên tắc.** Một bộ test toàn màu xanh không nói lên điều gì cho tới khi
-bạn thấy nó **đỏ đúng lúc phải đỏ**. Và bạn phải viết ra *kỳ vọng đỏ* **trước
-khi** gieo lỗi — nếu không, bạn sẽ hợp lý hoá bất cứ kết quả nào nhận được.
-
-**Việc làm cụ thể.** Quy trình bốn nhịp, làm đúng theo thứ tự này:
-
-1. Liệt kê trước: gieo lỗi X thì **những kiểm nào phải đỏ**.
-2. Gieo lỗi, chạy eval.
-3. Đối chiếu. Mục **lẽ ra đỏ mà vẫn xanh = TEST GIẢ**.
-4. Khôi phục, **và xác minh mã đã hoàn nguyên sạch**.
-
-**Prompt mẫu thật** (tái dựng — nội dung của bước này ở phiên đóng gói):
-
-```
-Viết một script kiểm ngược cho bộ eval. Với mỗi lỗi gieo vào, ghi TRƯỚC danh
-sách những kiểm phải chuyển sang đỏ. Rồi gieo lỗi, chạy eval, đối chiếu.
-Mục nào lẽ ra đỏ mà vẫn xanh thì báo là TEST GIẢ. Cuối cùng khôi phục mã và
-xác minh cây mã sạch lại rồi eval xanh trở lại.
-```
-
-**Quyết định chốt.** 🔧 Vòng kiểm ngược đầu tiên bắt được **hai** thứ, cả hai
-đều sẽ âm thầm phá hoại nếu bỏ qua bước này:
-
-*Một test giả thật.* Kiểm ban đầu viết là "`all` không đụng một host quá một
-lần" (`len(hosts) == len(set(hosts))`). Gieo lỗi vào, nó **vẫn xanh**: khi
-`all` sai thành đúng một phần tử, tập một phần tử đương nhiên không trùng.
-Câu khẳng định đúng nhưng rỗng. Sửa thành **phủ chính xác**: số lần cast phải
-bằng đúng tập host loa riêng biệt — không thừa, không thiếu.
-
-*Một cái bẫy bytecode.* Lỗi gieo vào đổi `!= "group"` thành `== "group"` —
-**dài y hệt**. `git checkout` khôi phục nội dung, `git status` sạch, nhưng eval
-vẫn đỏ: Python đang chạy lại `.pyc` cũ. Nghĩa là nếu bỏ bước 4 ("xác minh mã
-hoàn nguyên sạch"), cả vòng kiểm ngược sẽ đọc ra kết luận sai hoàn toàn — và
-tệ hơn, ở chiều ngược lại nó có thể báo xanh cho một bản mã đã hỏng.
-
----
-
-## Bước 10 — Vệ sinh mock: một canh gác chỉ che một đường
-
-**Nguyên tắc.** Mock rò rỉ giữa các tầng test là loại lỗi tệ nhất, vì nó khiến
-test **nói dối theo cả hai chiều**: báo thành công giả, hoặc báo hỏng giả.
-Vá từng đường rò là thua. Phải cô lập.
-
-**Việc làm cụ thể.** Ở phiên trước, đúng lỗi này dính **hai lần**:
-
-*Lần một.* Tầng offline thay `tts.synthesize` ngay trên module object. Tầng
-`--online` sau đó đo nhầm hàm giả và báo "mp3 0 byte". Sửa, và thêm một canh
-gác.
-
-*Lần hai.* Canh gác đó **chỉ che đường TTS**. Một phép thử "mạng rỗng" thay
-`list_speakers`/`discover` lên `server._manager` rồi **không khôi phục** →
-tầng `--hardware` FAIL `no speaker answered mDNS`, trong khi loa vẫn sống hoàn
-toàn bình thường: cổng 8009 mở, gọi `say` thủ công phát được.
-
-Mất công chẩn đoán một "lỗi phần cứng" không hề tồn tại.
-
-**Quyết định chốt.** Lần này thiết kế **cô lập ngay từ đầu**, ba lớp:
-
-1. Mọi phép thay thế đi qua một context manager khôi phục trong `finally`.
-2. Một hàm `assert_pristine()` chạy **sau mỗi tầng**, đối chiếu với ảnh chụp
-   lấy trước khi tầng đầu tiên chạy. Mock nào sống sót là đỏ ngay tại chỗ.
-3. Tầng online và tầng hardware **không dùng singleton dùng chung**. Chúng tự
-   dựng `CastManager` / `MediaServer` mới của riêng mình.
-
-Lớp 3 là lớp thật sự giải quyết vấn đề. Lớp 1 và 2 chỉ giúp phát hiện sớm.
-
-🔧 Một cám dỗ đã thử và loại: `importlib.reload(tts)` ở đầu tầng online, để
-"lấy lại bản sạch". Reload gán lại một function object hoàn toàn mới, **phá
-mất cái tay nắm duy nhất vào hàm thật**, khiến canh gác không còn phân biệt
-được thật với giả — và nó đã đỏ ngay ở lần chạy đầu. Đối chiếu với ảnh chụp
-thì được; reload thì không.
-
-**Bài học rộng:** khi một lớp bảo vệ chỉ che được một đường, đừng thêm lớp thứ
-hai cho đường thứ hai. Hỏi xem có cách nào để không có đường nào cả.
-
----
-
-## Bước 11 — Phân tầng test theo tác dụng phụ
-
-**Nguyên tắc.** Một bộ test mà không ai dám chạy thì bằng như không có.
-
-**Việc làm cụ thể.** Sản phẩm này phát ra tiếng trong một căn nhà thật. Nếu
-eval mặc định làm điều đó, sẽ không ai chạy nó, và nó sẽ mục.
-
-| Tầng | Cờ | Gây ra gì |
+| Phương án | Kỹ thuật | Kết luận |
 |---|---|---|
-| offline | (mặc định) | **không gì cả** — không mạng, không tiếng |
-| online | `--online` | gọi internet, vẫn im lặng |
-| hardware | `--hardware` | **phát tiếng thật** |
+| gTTS | miễn phí, không key | giọng máy móc |
+| Google Cloud TTS | chất lượng cao | cần API key + trả phí |
+| Piper | chạy offline | tiếng Việt yếu, setup nặng |
+| **edge-tts** | miễn phí, không key | **tự nhiên nhất — người dùng chọn** |
 
-**Quyết định chốt.** Tầng mặc định phải hoàn toàn không có tác dụng phụ. Tầng
-gây ra hậu quả ngoài đời là cờ opt-in, và phải xin phép chủ nhà **mỗi lần**.
+**Việc làm cụ thể — thành phần xương sống (pychromecast).** **Không qua so sánh
+nào.** Nó là thư viện Python duy nhất còn được bảo trì cho giao thức Cast. Bày
+ra một bảng so sánh giả vờ ở đây là lãng phí thời gian của cả hai bên.
 
-Cùng một nguyên tắc với Bước 4, áp cho test thay vì cho tool: cái gì chạm vào
-thế giới thật thì phải do con người bấm nút.
+**Prompt mẫu** *(tái dựng — bản gốc không giữ nguyên văn)*:
+
+```
+Tôi cần đọc chữ tiếng Việt thành tiếng, phát ra loa Google.
+Hãy so sánh các thư viện TTS tiếng Việt theo: chất lượng giọng, chi phí,
+có cần API key không, chạy offline được không.
+Với tiêu chí "nghe có tự nhiên không" thì đừng tự chấm — hãy sinh cho tôi
+một file mp3 mẫu cho mỗi phương án để tôi nghe rồi tự chọn.
+```
+
+**Quyết định chốt.** `edge-tts` (`vi-VN-HoaiMyNeural` nữ / `NamMinhNeural` nam).
+Và một quyết định về **quy trình**: chỉ **MỘT vòng** so sánh, không lặp. Người
+dùng đã nghe và chọn xong thì đóng lại, không quay về bàn tiếp.
+
+---
+
+## Bước 3 — Chỗ thiếu thông tin: hỏi lại, đừng mặc định
+
+**Nguyên tắc.** Khi thiếu thông tin mà **đoán sai gây hậu quả vật lý**, hành
+động đúng là **trả về câu hỏi**, không phải chọn một mặc định "hợp lý".
+
+**Việc làm cụ thể.** Gọi `say` mà không nói loa nào thì:
+
+- **không** phát ra tất cả (cả nhà nghe — hậu quả vật lý);
+- **không** phát ra loa đầu tiên (tuỳ tiện);
+- **không** dùng MCP elicitation để server tự hỏi;
+- **có**: trả về `status="needs_speaker_selection"` + danh sách loa + một câu
+  bảo LLM hỏi lại người dùng.
+
+Và quan trọng: **đường này KHÔNG được gọi TTS.** Nếu vẫn tổng hợp giọng rồi mới
+phát hiện thiếu loa thì đã tốn hạn ngạch cho một việc không ai yêu cầu.
+
+**Prompt mẫu** *(tái dựng)*:
+
+```
+Khi tool được gọi mà thiếu tham số bắt buộc và việc đoán sai có hậu quả
+không hoàn tác được, đừng chọn giá trị mặc định. Trả về một cấu trúc đủ để
+LLM hỏi lại người dùng: trạng thái, danh sách lựa chọn, câu hướng dẫn.
+Đường trả-về-câu-hỏi này không được gây bất kỳ tác dụng phụ nào.
+```
+
+**Quyết định chốt.** Trả dữ liệu cho LLM hỏi lại, thay vì elicitation. Đánh đổi
+rõ ràng: kém "gọn" hơn về mặt giao thức, nhưng chạy được ở mọi client — mà mục
+đích là dùng được, không phải đúng chuẩn.
+
+> **CHƯA THỬ — đây là phán đoán, không phải kết quả đo.** Căn cứ "nhiều client
+> chưa hỗ trợ elicitation" **không được kiểm bằng thực nghiệm** trong phiên này:
+> không có client nào được thử với elicitation rồi thất bại. Ai kế thừa mà muốn
+> đảo quyết định này thì hãy đo trước — bắt đầu bằng chính ba client đã dùng
+> thật (Claude Code, Claude Desktop, llama-server webui).
+
+🔧 Về sau đây là mục kiểm khó nhất của bộ eval, vì phải chứng minh **hai điều
+không xảy ra**: không cast, và không gọi TTS. Chứng minh "không xảy ra" luôn cần
+một thiết bị ghi lại lời gọi.
+
+---
+
+## Bước 4 — Đọc tín hiệu từ người dùng
+
+**Nguyên tắc.** Các câu người dùng gõ ra không bằng giá trị nhau. Phải phân loại
+được, vì mỗi loại đòi một hành động khác hẳn.
+
+**Việc làm cụ thể.** Bốn loại tín hiệu gặp trong phiên này:
+
+| Loại | Ví dụ | Hành động đúng |
+|---|---|---|
+| **Sinh ra sản phẩm** | ba yêu cầu đánh số | đối chiếu, biến thành module |
+| **Chỉ dán lỗi vào** | `URL must start with 'https'`, `Failed to fetch (check CORS?)`, `protocal error` | chẩn đoán hoàn toàn thuộc về AI — người dùng không có gì thêm để cho |
+| **LẶP LẠI y hệt** | `vẫn báo lổi` → `vẫn báo lổi:` | **đây là tín hiệu SAI HƯỚNG** |
+| **Lạc đề nhưng gấp** | "tại sao nhập đúng mật khẩu vẫn báo sai" | ngắt việc đang làm |
+
+**Về tín hiệu lặp lại.** Người dùng nói "vẫn báo lổi" hai lần liên tiếp với đúng
+câu chữ cũ. Hành động đúng: **dừng sửa, đi kiểm bản sửa đã được NẠP chưa.** Tôi
+đã bỏ lỡ một vòng vì cứ tiếp tục sửa mã nguồn.
+
+Đây là thứ cần **NHẬN RA ở phía người đọc note này**, không phải câu để gõ lại
+cho AI.
+
+**Về câu lạc đề.** `kiểm tra xem tại sau gatewaya khi chạy sudo tôi nhập đúng
+password những vẫn báo sai hoài` — hoàn toàn không liên quan tới loa, và là việc
+**gấp nhất cả phiên**: hoá ra có `pam_exec` gọi một binary chạy dưới quyền root
+đang thu mật khẩu. Nguyên tắc: câu lạc đề vẫn phải **đánh giá mức nghiêm trọng**
+trước khi gạt sang bên.
+
+**Về hai lần đo mâu thuẫn.** Người dùng nói `có workinig speaker xác minh luôn
+tts -> HTTP -> cast chạy thật` (tốt), rồi sau đó `khi phát loa working display
+chi nháy sáng rồi tắt không phát đầy đủ âm thanh` (hỏng) — **cùng một thiết bị**.
+Chỉ nhờ giữ **lịch sử đo** mới phân định được: không phải hồi quy mã nguồn, mà
+là thiết bị treo.
+
+---
+
+## Bước 5 — Chẩn đoán khi thông báo lỗi nói dối
+
+**Nguyên tắc.** Với hệ thống nhiều tầng (client → proxy → server → thiết bị),
+thông báo lỗi thường xuất phát từ tầng **không phải** tầng có lỗi. Trước khi
+sửa, hãy hỏi *tầng nào thật sự đang từ chối?*
+
+**Việc làm cụ thể — bốn ca đáng học nhất:**
+
+**a) `421 Misdirected Request`.** Có vẻ như lỗi định tuyến. Thật ra SDK chỉ tin
+`127.0.0.1`. Bẫy: bind `0.0.0.0` **không** giải quyết được — bind là "nghe ở
+đâu", allowlist là "tin ai gọi tới". Hai chuyện khác nhau. Cách chữa là **nới**
+allowlist, **không tắt** kiểm tra — tắt là mở đường cho bất kỳ trang web nào
+người dùng mở tấn công server nội bộ.
+
+**b) Client treo, KHÔNG có thông báo lỗi nào.** Loại tệ nhất, vì không có gì để
+tra. Nguyên nhân: nginx buffer nguyên dòng SSE. Vá: `proxy_buffering off`.
+Bài học: **triệu chứng "im lặng" trỏ về tầng trung gian**, không trỏ về hai đầu.
+
+**c) `Failed to fetch (check CORS?)`.** Trình duyệt cố tình không cho JavaScript
+biết vì sao — nên chuỗi lỗi rỗng đó **là thông tin**: nó nói "trình duyệt chặn",
+chứ không nói "server hỏng". SDK trả `OPTIONS`=405 không kèm header CORS. Vá
+bằng `CORSMiddleware`, và **bắt buộc** `expose_headers=["Mcp-Session-Id"]` —
+thiếu dòng này thì preflight qua nhưng không duy trì được phiên.
+
+**d) Ngõ cụt tuyệt đối.** Người dùng tạo tên miền `google_cast.adrec.cloud`. Dấu
+gạch dưới **không bao giờ** xin được chứng chỉ (CA/B Forum cấm), mà Claude
+Desktop lại bắt buộc https. Không có đường vòng nào cả.
+
+Bài học: **phân biệt "khó" với "không tồn tại đường đi".** Với ngõ cụt tuyệt
+đối, việc đúng là báo ngay để người dùng đổi ràng buộc (tạo tên miền dùng gạch
+nối), không phải thử tiếp.
+
+**Prompt mẫu** *(tái dựng)*:
+
+```
+Lỗi này xuất hiện ở tầng nào? Liệt kê từng tầng mà request đi qua
+(trình duyệt → nginx → uvicorn → SDK → thiết bị), và với mỗi tầng nói:
+tầng này CÓ THỂ sinh ra đúng thông báo này không, và nếu có thì cách
+xác nhận rẻ nhất là gì. Đừng sửa gì trước khi trả lời xong.
+```
+
+**Quyết định chốt.** Giữ nguyên bảo vệ DNS-rebinding của SDK, chỉ nới allowlist
+— và allowlist phải đủ **bốn dạng**: host trần, `host:*`, scheme `http`, scheme
+`https`. Thiếu một dạng là hỏng ở đúng một tình huống, mà thông báo lỗi không
+hề nói cho bạn biết thiếu dạng nào.
+
+---
+
+## Bước 6 — Cái bẫy mà API không phát hiện được
+
+**Nguyên tắc.** Với sản phẩm có tác dụng phụ vật lý, **"API trả về thành công"
+không phải bằng chứng đúng.** Phải hỏi: có trạng thái sai nào mà mọi chỉ báo
+đều xanh không?
+
+**Việc làm cụ thể.** `target="all"` gửi tới cả **nhóm loa** lẫn **từng thành
+viên**. Nhóm Cast phát *thông qua* thành viên, nên một loa vật lý nhận **hai
+luồng cùng lúc** — nghe như tiếng vọng chồng lên nhau.
+
+`Family speaker group` và `Kitchen speaker` cùng địa chỉ `192.168.1.22` — dấu
+vết duy nhất nhìn thấy được. **Cả bốn đích đều trả `playing` — trạng thái API trả về KHÔNG phân biệt
+được ca này với ca đúng.** Thứ duy nhất nghe ra là tai người.
+
+Nói cho chính xác: có **một** dấu vết máy đọc được, và nó chính là chỗ bấu víu
+để vá — hai đích **cùng địa chỉ `host`**. Nhưng nó nằm ở *siêu dữ liệu thiết
+bị*, không nằm ở *kết quả thao tác*. Bài học đúng là: **khi kết quả trả về không
+phân biệt được đúng với sai, hãy đi tìm dấu vết ở tầng dữ liệu khác** — đừng
+dừng ở "không kiểm được".
+
+Vá (`fcf4035`): `all` loại các đích có `cast_type == "group"`; nhóm vẫn cast
+được khi gọi đích danh.
+
+**Quyết định chốt.** Quy tắc chung rút ra: **khi hai đích trỏ tới cùng một tài
+nguyên vật lý, "gửi tới tất cả" phải chọn MỘT tầng, không phải cả hai.** Áp
+được sang: nhóm thiết bị IoT, danh sách gửi mail có nhóm lồng nhau, phát tin
+theo topic có topic cha.
+
+🔧 Về sau đây thành lỗi gieo vào số 1 của `reverse-check.py` — vì nó là lỗi đắt
+nhất đã từng lọt.
+
+---
+
+## Bước 7 — Viết bộ kiểm mà người ta dám chạy
+
+**Nguyên tắc.** Với sản phẩm có tác dụng phụ vật lý: **tầng mặc định phải không
+gây tác dụng phụ**, tầng thật là cờ opt-in. Bộ kiểm không ai dám bấm chạy thì
+bằng không có.
+
+**Việc làm cụ thể.** Ba tầng: mặc định (offline, 138 mục) → `--online` (gọi TTS
+thật, 157 mục) → `--hardware` (phát tiếng thật, phải xin phép).
+
+Bốn luật, mỗi luật rút từ một lỗi đã dính thật:
+
+**Luật 1 — So TẬP KỲ VỌNG tường minh, không so kích thước.** Dạng test giả phổ
+biến nhất là so đếm thay cho so tập. Ca thật: `len(hosts) == len(set(hosts))` để
+kiểm "`all` không phát chồng". Nó **vẫn xanh** khi `all` sai thành đúng một phần
+tử — một phần tử thì không thể trùng. Tự soát: mọi `len()`, `count`, `>=` phải
+trả lời được *"có hình dạng SAI nào khiến con số này vẫn đúng không?"*.
+
+**Luật 2 — Bài kiểm phải từng ĐỎ, với kỳ vọng khai TRƯỚC.** Gieo lỗi vào mã
+nguồn, nhưng **viết ra danh sách mục lẽ-ra-phải-đỏ TRƯỚC khi chạy**. Thứ tự là
+tất cả: nhìn kết quả rồi mới "kỳ vọng" là tự lừa mình. Mục lẽ-ra-đỏ-mà-xanh =
+**test giả**, phải sửa hoặc ghi **CHƯA PHỦ** — chú thích suông không phải một
+lựa chọn.
+
+**Luật 3 — Hoàn nguyên = chạy lại thấy XANH, không phải `git status` sạch.** Đã
+dính: một lỗi gieo vào **dài đúng bằng bản gốc**, khôi phục xong git sạch trơn,
+nhưng `.pyc` cũ còn đó và eval vẫn đỏ. Suýt kết luận "sản phẩm hỏng". Quy trình
+đúng: khôi phục → **xoá `__pycache__`** → chạy lại → đòi thấy xanh.
+
+**Luật 4 — Khẳng định bất đồng bộ phải có MỐC CHỜ.** Đã dính: đọc `player_state`
+ngay khoảnh khắc `play_media` trả về. Hàm đó chỉ chờ **ứng dụng khởi động**,
+chưa chờ **phát** → FAIL `Kitchen speaker reports IDLE` dù loa hoàn toàn tốt.
+Không có mốc chờ nghĩa là đang đo tốc độ mạng, không đo hành vi.
+
+**Vệ sinh mock.** Ảnh chụp lấy **trước tầng đầu**, khôi phục trong `finally`,
+tầng sau dựng object **MỚI**. **`importlib.reload` KHÔNG phải bản sạch** — nó
+nạp module mới dưới chân chính cái ảnh chụp đang giữ tay nắm, phá luôn đường
+khôi phục. Đã thử và phải loại.
+
+**Prompt mẫu** *(tái dựng, dùng được cho sản phẩm khác)*:
+
+```
+Viết bộ kiểm cho sản phẩm này, phân tầng theo tác dụng phụ: tầng mặc định
+không được gây tác dụng phụ nào; tầng chạm thật là cờ opt-in.
+
+Ràng buộc bắt buộc:
+- Mọi khẳng định so TẬP KỲ VỌNG tường minh. Cấm so kích thước/đếm thay cho
+  so tập.
+- Mọi khẳng định chạm mạng hoặc thiết bị phải có mốc chờ (timeout + điều
+  kiện thoả), không được đọc trạng thái ngay khi lời gọi trả về.
+- Mock: chụp ảnh trước tầng đầu tiên, khôi phục trong finally, mỗi mục kiểm
+  dựng object mới. Không dùng importlib.reload.
+
+Rồi viết một script kiểm ngược: KHAI TRƯỚC danh sách mục lẽ-ra-phải-đỏ cho
+mỗi lỗi gieo vào, chạy, so kỳ vọng với thực tế, và cuối cùng xác minh hoàn
+nguyên bằng cách xoá bytecode rồi CHẠY LẠI bộ kiểm để thấy xanh.
+```
+
+**Quyết định chốt.** Kiểm ngược không phải nghi thức — nó tìm ra **ba thứ thật**
+trong chính bộ kiểm vừa viết:
+
+1. Một test giả không bao giờ đỏ được, mà nguyên nhân sâu hơn vẻ ngoài: khi hình
+   dạng trả về đổi, một mục kiểm phía trên **ném lỗi**, bộ kiểm **sập giữa
+   chừng**, và mọi mục phía sau **không bao giờ chạy** — trông như "ít đỏ hơn"
+   thực tế. Bài học riêng: **một cú sập giữa chừng làm bộ kiểm nói dối theo
+   hướng lạc quan.**
+2. Một **kỳ vọng sai** (không phải test giả) — bài kiểm vẫn thật, kỳ vọng mới là
+   thứ sai → sửa kỳ vọng, **không nới bài kiểm**. Phân biệt hai ca này là quan
+   trọng: nới bài kiểm cho khớp kỳ vọng sai chính là cách sinh ra test giả.
+3. Một mục kiểm chỉ đang **kiểm Python**: nó viết lại biểu thức kẹp âm lượng
+   ngay trong bài kiểm thay vì gọi vào sản phẩm.
+
+Và nó tìm ra **hai khiếm khuyết thật trong sản phẩm** (`tts.py` không thử lại
+khi dịch vụ trả rỗng; file 0 byte đọng lại khi hỏng) — đã ghi vào
+`package/technical-docs.md` mục 6, **chưa vá**.
+
+---
+
+## Bước 8 — Đóng gói: cửa vào phải là đường người lạ đi được
+
+**Nguyên tắc.** Định nghĩa "đã đóng gói xong" là: **người lạ, máy sạch, chỉ đọc
+README, đưa được sản phẩm vào trạng thái dùng được.** Không qua phép thử đó thì
+chưa có package, dù bộ kiểm xanh rờn.
+
+**Việc làm cụ thể.** Bước 0 của README phải là **đường lấy mã mà người lạ đi
+được**: repo có remote, hoặc một artefact phát hành có đóng dấu. Đường dẫn local
+trên máy người đóng gói **không tính** — nó chỉ tồn tại với đúng một người.
+
+Repo này riêng tư, nên README phải ghi thêm **xin quyền từ AI, qua KÊNH NÀO**
+(chủ repo `devAdrec`, qua GitHub issue hoặc nhắn trực tiếp). Không có mục đó thì
+người đọc gặp `Repository not found` và tưởng mình gõ sai.
+
+Và bằng chứng phải là **hành động, không phải đọc thấy ổn**: clone thật vào thư
+mục sạch, chạy lại **từng lệnh trong README**, dán output ra.
+
+**Prompt mẫu** *(tái dựng — giao thẳng cho AI để nó tự chứng minh)*:
+
+```
+Hãy CHỨNG MINH tài liệu cài đặt này dùng được, bằng hành động chứ không
+bằng đọc:
+1. Clone repo từ remote vào một thư mục tạm HOÀN TOÀN mới. Không được dùng
+   đường dẫn tới bản làm việc trên máy này.
+2. Chạy lại TỪNG lệnh trong tài liệu, theo đúng thứ tự, không thêm bước nào
+   mà tài liệu không ghi.
+3. Dán output thật của từng lệnh.
+4. Lệnh nào hỏng, hoặc bước nào bạn phải tự suy ra mới đi tiếp được, thì đó
+   là một lỗ hổng của tài liệu — liệt kê ra.
+Đọc thấy hợp lý KHÔNG được tính là bằng chứng.
+```
+
+**Quyết định chốt.** Bốn tài liệu bàn giao viết **mỏng và TRỎ về nguồn**, không
+chép lại. `README.md` và `docs/architecture.md` ở gốc repo là tài liệu **đang
+sống** — chép nội dung của chúng sang `package/` là tự tạo ra hai bản sự thật sẽ
+lệch pha trong vài tuần. Mỗi tài liệu giữ đúng một mục đích riêng:
+
+| Tài liệu | Mục đích riêng |
+|---|---|
+| `README.md` | từ số 0 tới **gọi được tool** — file duy nhất phải qua phép thử người-lạ |
+| `requirement.md` | yêu cầu gốc **nguyên văn** + tiêu chí chấp nhận |
+| `technical-docs.md` | trỏ sang `docs/architecture.md`, bổ sung **ràng buộc triển khai + điểm còn hở** |
+| `user-manual.md` | dùng hằng ngày, các dạng chỉ định loa, lỗi thường gặp |
 
 ---
 
 ## Cách đã kiểm chứng
 
-Bảng này là dữ liệu thật, không phải kế hoạch. "CHƯA THỬ" là chưa thử.
+Chỗ chưa thử ghi rõ **CHƯA THỬ** — đừng để trống.
 
 | Kịch bản | Số lần | Biên / điều kiện xấu | Kết quả |
 |---|---|---|---|
-| `say` → Kitchen speaker | nhiều | bình thường | `playing`; người dùng xác nhận **nghe được** |
-| `say` → Working display (Nest Hub) | **5 lần rải 2 ngày** | thiết bị treo rồi restart | 3 lần đầu **thất bại** (`wait timed out`, 8009 refuse); sau restart: 1 OK + 3 clip đo |
-| Đo thời lượng phát | **3 clip** (2.09 / 4.27 / 7.10s) | độ dài khác nhau | cả 3 `PLAYING` đủ `duration` → `idle_reason=FINISHED`; log HTTP xác nhận loa **có** tải file (200) |
+| `say` → Kitchen speaker | CHƯA ĐẾM chính xác (≥6 lần, rải nhiều ngày) | bình thường | `playing`; **người dùng xác nhận NGHE ĐƯỢC** |
+| `say` → Working display (Nest Hub) | **5 lần rải 2 ngày** | thiết bị treo rồi khởi động lại | 3 lần đầu THẤT BẠI (`wait timed out`, 8009 refuse); sau restart: 1 OK + 3 clip đo |
+| Đo thời lượng phát | **3 clip** (2.09 / 4.27 / 7.10s) | độ dài khác nhau, ngắn nhất ~2s | cả 3 `PLAYING` đủ `duration` → `idle_reason=FINISHED` |
 | Thương lượng `protocolVersion` | **3 phiên bản** | client cũ và mới | cả 3 trả đúng version |
-| MCP client thật qua https (nginx + TLS) | 1 | — | initialize + 13 tool + `list_speakers` → 4 loa |
-| MCP client thật qua LAN `:8765` | 1 | — | như trên |
-| Client trình duyệt (origin `http://192.168.1.99:8383`) | 1 | có CORS | preflight 200 + allow-origin đúng; initialize 200 JSON; 13 tool |
-| `--json-response --stateless` | 1 | client khắt khe hơn đặc tả | trả `application/json`; `tools/call` không cần session id |
-| Dò thiết bị + lọc loa | nhiều | mạng thật, 8 thiết bị | 4 loa / 4 thiết bị hình ảnh |
-| `target="all"` | **2 lần: trước và sau khi sửa** | 4 loa song song | trước: 4 `playing` nhưng **chồng luồng**; sau: 3 loa riêng lẻ |
-| Nhiều loa cách phẩy | 1 | 2 loa | cả 2 `playing` |
+| MCP client thật qua https (nginx + TLS) | 1 | CHƯA THỬ ở điều kiện xấu (cert hết hạn, proxy chết) | initialize + 13 tool + `list_speakers` → 4 loa |
+| Client trình duyệt (Origin `http://192.168.1.99:8383`) | 1 | có CORS | preflight 200, allow-origin đúng, 13 tool |
+| `--json-response --stateless` | 1 | client khắt khe về framing | `tools/call` không cần session id |
+| Dò thiết bị + lọc loa | CHƯA ĐẾM (≥10 lần, mỗi lần khởi động service) | mạng thật 8 thiết bị | 4 loa / 4 thiết bị hình ảnh |
+| `target="all"` | **2 lần: TRƯỚC và SAU khi sửa** | 4 loa song song | trước: 4 `playing` nhưng **chồng luồng**; sau: 3 loa đơn |
 | Cô lập lỗi: 1 loa thật + 1 tên không tồn tại | 1 | phần tử hỏng | loa thật `playing`, phần tử hỏng `error` riêng, tổng thể `ok` |
-| **Eval offline** | **4 phiên đóng gói** | không tiếng | 35/35 → 43/43 → 62/62 → **67/67**, exit 0 |
-| **Eval `--online`** | 2 | cần internet | 72/72 → **79/79**, exit 0 |
-| **Eval `--hardware`** (xin phép mỗi lần) | 4, kể cả phiên này | cast thật | 37/37 → 48/48 → FAIL 62/63 rồi 67/67 (rò mock thứ hai) → **FAIL 90/91 rồi 91/91** (khẳng định đo sai thời điểm) |
-| **Kiểm ngược có kỳ vọng viết trước** | 1 (phiên này) | 3 lỗi gieo vào | bắt được **1 test giả** + **1 bẫy bytecode**; sau khi sửa: mọi kỳ vọng đỏ đều đỏ, mã hoàn nguyên sạch, eval xanh lại |
-| **DoD: cài lại theo README, gọi tool** | 2 (phiên này) | cổng rỗi 8799 / 8798 | tại chỗ: initialize OK, `tools/list` → **13 tool**, `tools/call list_speakers` → loa thật. **Từ bản clone mới của remote** + `uv sync`: initialize OK, **13 tool** |
+| **DoD clone từ remote** | 2 (phiên trước + phiên này) | thư mục tạm sạch | clone → `uv sync` → 13 tool qua **cả stdio và HTTP** → `tools/call list_speakers` trả tên loa thật |
+| **Eval offline** | 5 phiên đóng gói, ≥20 lượt chạy | không tiếng | 35 → 43 → 62 → 67 → **138/138** |
+| **Eval `--online`** | 3 lượt phiên này + các phiên trước | cần internet; đã gặp dịch vụ trả rỗng | 72 → 79 → **157/157** |
+| **Eval `--hardware`** | 4 (xin phép mỗi lần) | cast thật | 37/37 → 48/48 → FAIL 62/63 rồi 67/67 (rò mock) → FAIL 90/91 rồi **91/91** (thiếu mốc chờ) |
+| **Kiểm ngược bộ eval** | 3 vòng phiên này | 12 lỗi gieo + 1 đối chứng | vòng 1: 2 test giả; vòng 2: sửa xong, 0 test giả; hoàn nguyên XANH |
+| edge-tts dưới yêu cầu dồn dập | 3 liên tiếp, rồi 6 lần giãn 4s | không giãn cách | **hỏng ~2/3 khi dồn; 6/6 khi giãn** → phát hiện sản phẩm thiếu thử lại |
 
-**Biên đã quan sát được (thật, không suy đoán):** TCP 8009 refuse → timeout ·
-mDNS sót thiết bị đã lưu → `DeviceNotFoundError` tự mâu thuẫn · origin ngoài
-allowlist → 403 · host không tin → 421 · mở `/mcp` bằng trình duyệt → 406
-(**đúng đặc tả**, không phải lỗi) · preflight chưa bật CORS → 405 không header
-· bỏ `target` → `needs_speaker_selection`, không phát gì · cài lại service khi
-đang chạy → tiến trình **không** đổi · `all` gồm cả nhóm lẫn thành viên →
-chồng luồng mà API vẫn báo `playing` · **hai lần rò mock trong chính bộ eval**
-· bytecode cũ khiến mã đã khôi phục vẫn chạy như bản hỏng.
+**Biên / điều kiện xấu đã quan sát thật:** TCP 8009 refuse → timeout; mDNS sót
+thiết bị đã lưu → `DeviceNotFoundError` tự mâu thuẫn; Origin ngoài allowlist →
+403; Host không tin → 421; mở `/mcp` bằng trình duyệt → 406 (đúng đặc tả);
+preflight chưa bật CORS → 405; bỏ `target` → `needs_speaker_selection`, không
+phát gì; cài lại service khi đang chạy → tiến trình **KHÔNG đổi**; `all` gồm cả
+nhóm lẫn thành viên → chồng luồng mà API vẫn báo `playing`; **bốn loại lỗi trong
+chính bộ eval: rò mock ×2, test giả so-kích-thước, khẳng định thiếu mốc chờ, và
+sập-giữa-chừng khiến bộ kiểm nói dối theo hướng lạc quan**.
 
-**CHƯA THỬ:**
+### CHƯA THỬ
 
-- Giọng nam `vi-VN-NamMinhNeural` **bằng tai** (eval chỉ kiểm được file khác rỗng).
-- Tham số `rate` **bằng tai**.
-- Service sống sót qua **reboot máy** (đã `enable`, chưa reboot bao giờ).
-- Địa chỉ đã lưu bị cũ vì loa đổi IP → nhánh quét lại.
-- Chặn IP ở nginx (đã đồng ý bật, hai dòng vẫn đang comment).
-
----
-
-## Điểm còn hở (không tô hồng)
-
-- **Không có xác thực ở tầng ứng dụng.** `google-cast.adrec.cloud` phân giải
-  **công khai ra internet**. Ai với được `/mcp` là phát được tiếng trong nhà.
-- **Cổng audio 8766 bind `0.0.0.0`**, không xác thực, phục vụ nguyên thư mục
-  cache. Chặn IP ở nginx **chỉ che 8765**, không che cổng này.
-- Cache TTS tăng vô hạn, chưa dọn.
-- Chưa khôi phục âm lượng / nội dung đang phát sau khi chen thông báo vào.
-- Kho mã đã có remote (`github.com/devAdrec/googlecast-mcp`) nhưng là repo
-  **riêng tư**: người lạ vẫn cần được cấp quyền mới clone được. Đó là điều
-  kiện thật, ghi rõ ở bước 0 của `package/README.md` chứ không giấu.
+- Giọng nam `vi-VN-NamMinhNeural` **bằng tai**.
+- Tham số `rate` **bằng tai** (mới chỉ so kích thước file).
+- Service sống sót qua **reboot máy** (đã `enable`, chưa reboot lần nào).
+- Địa chỉ đã lưu bị cũ vì loa **đổi IP** → nhánh quét lại.
+- Chặn IP ở nginx (đã đồng ý bật, hai dòng **vẫn đang comment**).
+- Tầng `--hardware` **trong phiên đóng gói này** — chưa xin phép người quanh đó.
 
 ---
 
-## Đi tiếp
+## Ngõ cụt đã đi qua (đừng đi lại)
 
-| Muốn gì | Đọc file nào |
+| # | Ngõ cụt | Cách thoát |
+|---|---|---|
+| 1 | `421 Misdirected Request`; bind `0.0.0.0` **không** đủ | nới allowlist đủ **4 dạng** (`__main__.py:46-69`) |
+| 2 | nginx buffering làm client treo, **không báo lỗi gì** | `proxy_buffering off` + `proxy_read_timeout 3600s` |
+| 3 | Tên miền có `_` **không bao giờ** xin được chứng chỉ | đổi sang gạch nối — ngõ cụt tuyệt đối, báo ngay |
+| 4 | Claude Desktop connector chỉ nhận https | bắc cầu `mcp-remote … --allow-http` |
+| 5 | `Failed to fetch (check CORS?)`, JS chỉ thấy lỗi rỗng | `CORSMiddleware` + **bắt buộc** `expose_headers=["Mcp-Session-Id"]` |
+| 6 | `systemctl enable --now` **KHÔNG** restart service đang chạy → bản sửa sống 3 ngày vô tác dụng | `restart` tường minh + `status` in `/proc/<MainPID>/cmdline` |
+| 7 | Thiết bị Cast treo: mDNS + ping OK nhưng TCP 8009 refuse | `nc -z <ip> 8009` **TRƯỚC** khi nghi mã nguồn; restart thiết bị |
+| 8 | mDNS sót thiết bị đã lưu → `DeviceNotFoundError` tự mâu thuẫn | `_connect_saved()` kết nối thẳng theo địa chỉ đã lưu |
+| 9 | `pkill -f "<mẫu>"` khớp luôn shell đang chạy → tự giết mình (exit 144) | lọc theo cổng hoặc PID |
+| 10 | `target="all"` chồng luồng lên nhóm loa — **API không phát hiện được** | `all` bỏ `cast_type=group` (`fcf4035`) |
+| 11 | `importlib.reload` để "làm sạch mock" | không sạch — phá tay nắm của chính canh gác; dùng ảnh chụp + `finally` |
+| 12 | Gieo lỗi dài bằng bản gốc → `.pyc` cũ, git sạch mà eval đỏ | Bước 7, luật 3 |
+| 13 | Bộ kiểm sập giữa chừng vì `KeyError` → giấu hết mục phía sau | Bước 7, phần "quyết định chốt" |
+
+**Bài học suy luận** (từ #7): đã từng kết luận sai *"Nest Hub bỏ cổng 8009 do
+firmware"* chỉ vì **cả hai** Nest Hub cùng đóng cổng — trong khi thật ra chỉ là
+hai thiết bị cùng treo. **Hai mẫu trùng nhau không đủ để suy ra nguyên nhân hệ
+thống.** Đây là chỗ duy nhất bài học này được giải thích.
+
+---
+
+## Thực thi ở đâu
+
+| Muốn | Đọc |
 |---|---|
 | Cài và chạy | `package/README.md` |
 | Yêu cầu gốc + tiêu chí chấp nhận | `package/requirement.md` |
-| Ràng buộc triển khai | `package/technical-docs.md` |
-| Dùng `say` | `package/user-manual.md` |
-| Ba tầng eval + kiểm ngược | `package/eval/README.md` |
-| Năm lớp harness | `package/harness-spec.md` |
-| Dựng lại **đúng** sản phẩm này | `reproduction-prompt.md` — chỉ dùng cho chính nó, **không phải khuôn cho bài khác** |
+| Ràng buộc triển khai + **điểm còn hở** | `package/technical-docs.md` |
+| Dùng hằng ngày | `package/user-manual.md` |
+| Thiết kế bộ kiểm | `package/harness-spec.md` |
+| Chạy kiểm chứng + kiểm ngược | `package/eval/README.md` |
+| Dựng lại đúng sản phẩm này từ đầu | `reproduction-prompt.md` |
+| Kiến trúc (tài liệu **sống**) | `docs/architecture.md` ở gốc repo |
