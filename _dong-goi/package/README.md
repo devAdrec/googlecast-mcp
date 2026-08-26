@@ -1,185 +1,183 @@
 # googlecast-mcp — cài từ số 0 tới gọi được tool
 
-MCP server để một trợ lý AI **nói tiếng Việt ra loa Google** trong nhà bạn, và
-điều khiển các thiết bị Google Cast trong mạng nội bộ.
+Đây là **tờ hướng dẫn cài đặt của gói bàn giao**. Nó chỉ có một mục đích: đưa
+người chưa từng thấy product này tới trạng thái **một MCP client gọi được tool
+`say` và nghe được tiếng nói phát ra từ loa Google trong nhà**.
 
-Tài liệu này chỉ có một việc: đưa người chưa từng thấy sản phẩm này, trên một
-máy sạch, tới lúc **gọi được tool**. Kiến trúc và vận hành nằm ở
-`technical-docs.md`; cách dùng hằng ngày nằm ở `user-manual.md`.
+Tài liệu sống của product nằm ở `README.md` và `docs/architecture.md` trong repo.
+Tờ này **không lặp lại chúng** — nó chỉ đi một đường thẳng từ số 0 đến khi tool
+chạy, và trỏ ngược về chúng khi cần chi tiết.
+
+- Yêu cầu gốc + tiêu chí chấp nhận → `requirement.md`
+- Ràng buộc triển khai + bảng khiếm khuyết → `technical-docs.md`
+- Dùng hằng ngày → `user-manual.md`
+- Bộ kiểm chứng → `eval/README.md`
 
 ---
 
-## 0. Lấy mã nguồn
+## Bước 0 — Lấy mã nguồn
 
 ```bash
 git clone https://github.com/devAdrec/googlecast-mcp.git
 cd googlecast-mcp
 ```
 
-> **Repo này là repo RIÊNG TƯ.** Lệnh trên chỉ chạy được nếu tài khoản GitHub
-> của bạn đã được cấp quyền đọc. Bạn cần:
->
-> - **Xin quyền từ ai:** chủ repo — tài khoản GitHub **`devAdrec`**.
-> - **Xin qua kênh nào:** mở issue tại
->   `https://github.com/devAdrec/googlecast-mcp/issues` (nếu đã thấy repo), hoặc
->   nhắn trực tiếp cho `devAdrec` trên GitHub. Không có bản công khai và không
->   có bản release tải rời — clone là đường duy nhất.
-> - **Xác thực:** sau khi được cấp quyền, dùng SSH key
->   (`git clone git@github.com:devAdrec/googlecast-mcp.git`) hoặc personal
->   access token có scope `repo`.
->
-> Nếu clone báo `Repository not found`, gần như chắc chắn là **chưa được cấp
-> quyền**, chứ không phải gõ sai đường dẫn.
+> **Repo đang ở chế độ private.** Người ngoài không clone được nếu chưa được cấp
+> quyền. Cách xin: mở issue trên GitHub gửi tới tổ chức **`devAdrec`**, hoặc nhắn
+> trực tiếp cho người bảo trì repo. Sau khi được thêm vào repo, cần **SSH key đã
+> nạp lên GitHub**, hoặc **Personal Access Token có scope `repo`** để clone qua
+> https. Không có quyền thì mọi bước dưới đây đều không chạy được — đừng bắt đầu.
 
-## 1. Điều kiện môi trường
-
-| Cần gì | Vì sao |
-|---|---|
-| Linux hoặc macOS, Python **≥ 3.11** | mã nguồn dùng cú pháp 3.10+ |
-| [`uv`](https://docs.astral.sh/uv/) | quản lý phụ thuộc và chạy; mọi lệnh dưới đây đều qua `uv` |
-| Máy **cùng lớp mạng LAN với loa** | dò thiết bị bằng mDNS, và loa sẽ **tải ngược** file âm thanh từ máy này |
-| Internet ra ngoài | edge-tts là dịch vụ đọc chữ trực tuyến của Microsoft |
-
-Cài `uv` nếu chưa có:
+Kiểm tra nhanh mình có quyền hay không, trước khi clone:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+git ls-remote https://github.com/devAdrec/googlecast-mcp.git
 ```
 
-**Máy phải nằm cùng LAN với loa.** Đây không phải khuyến nghị: thiết bị Cast tự
-đi tải media qua HTTP từ địa chỉ LAN của máy này. Đặt server ở đám mây thì loa
-không bao giờ tải được file.
+Ra được dòng `HEAD` + `refs/heads/main` là có quyền.
 
-## 2. Cài phụ thuộc
+## Bước 1 — Điều kiện môi trường
+
+| Cần | Vì sao |
+|---|---|
+| Python ≥ 3.11 | product dùng cú pháp `str \| None` |
+| [`uv`](https://docs.astral.sh/uv/) | quản lý môi trường + chạy; mọi lệnh dưới đây đều qua `uv` |
+| Máy **cùng LAN với loa** | dò thiết bị bằng mDNS, và **loa tự quay lại tải file audio từ máy này** |
+| Internet ra ngoài | edge-tts render giọng qua dịch vụ neural của Microsoft (không cần API key) |
+
+Điều kiện thứ ba là điều kiện dễ bỏ sót nhất: máy ảo/VPS ngoài mạng nhà **không
+chạy được**, dù mọi thứ khác đúng. Lý do ở `technical-docs.md` mục "Ràng buộc gốc".
+
+## Bước 2 — Cài phụ thuộc
 
 ```bash
 uv sync
 ```
 
-## 3. Chạy thử — dò loa
+## Bước 3 — Chạy thử tại chỗ (stdio)
 
 ```bash
-uv run googlecast-mcp --help
+uv run googlecast-mcp
 ```
 
-Danh sách thiết bị được lưu bền ở `~/.googlecast-mcp/speakers.json`, nên lần
-chạy sau không cần dò lại.
+Tiến trình sẽ đứng im chờ MCP client nói chuyện qua stdin — **đúng như vậy là
+đang chạy được**, không phải treo. Bấm `Ctrl-C` để thoát.
 
-## 4. Nối vào một MCP client
+## Bước 4 — Đăng ký với client
 
-### 4a. Claude Code, cùng máy (đơn giản nhất, dùng stdio)
+### Claude Code, cùng máy (đường ngắn nhất)
 
 ```bash
-claude mcp add --scope user googlecast -- uv run --directory "$PWD" googlecast-mcp
+claude mcp add --scope user googlecast -- uv run --directory "$(pwd)" googlecast-mcp
 claude mcp list
 ```
 
-Kết quả mong đợi: dòng `googlecast` kèm `✔ Connected`.
+Dòng `googlecast ... ✔ Connected` là đã xong.
 
-### 4b. Chạy như service HTTP cho máy khác dùng
+### Claude Desktop trên máy khác
 
-```bash
-./scripts/service.sh install
-./scripts/service.sh status
-```
-
-Mặc định: MCP ở cổng `8765`, cổng phát audio cho loa `8766`. Đổi bằng biến môi
-trường (`MCP_PORT`, `MEDIA_PORT`, `MCP_EXTRA_ARGS`). Ví dụ đang chạy thật:
-
-```bash
-MCP_EXTRA_ARGS="--allow-host google-cast.adrec.cloud --json-response --stateless \
-  --cors-origin http://192.168.1.99:8383" ./scripts/service.sh install
-```
-
-Gỡ: `./scripts/service.sh remove`.
-
-### 4c. Claude Desktop trên máy khác
-
-Claude Desktop **chỉ nhận connector https**. Server LAN chạy http, nên phải bắc
-cầu ở phía client:
+Claude Desktop chỉ nhận URL `https` ở ô **Add custom connector**, nên server LAN
+chạy http phải bắc cầu qua `mcp-remote` (cần Node.js trên máy client). Sửa
+`claude_desktop_config.json` (**Settings → Developer → Edit Config**):
 
 ```json
 {
   "mcpServers": {
     "googlecast": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://192.168.1.128:8765/mcp", "--allow-http"]
+      "args": ["-y", "mcp-remote", "http://<ip-máy-chạy-server>:8765/mcp", "--allow-http"]
     }
   }
 }
 ```
 
-Hoặc dựng reverse proxy có TLS — xem `scripts/nginx-googlecast-mcp.conf` và
-`technical-docs.md`.
+Khởi động lại Claude Desktop.
 
-### 4d. Client chạy trong trình duyệt
+### Client chạy trong trình duyệt (ví dụ llama-server webui)
 
-Phải khai báo **đúng origin trong thanh địa chỉ**, không thừa không thiếu:
+Server phải được khởi động kèm `--cors-origin` **khớp chính xác thanh địa chỉ**
+của trang (scheme + host + port, không path). Xem `user-manual.md`.
+
+## Bước 5 — Chạy như service (máy chủ luôn bật)
 
 ```bash
-MCP_EXTRA_ARGS="--cors-origin http://192.168.1.99:8383" ./scripts/service.sh install
+./scripts/service.sh install     # viết unit, enable, RESTART
+./scripts/service.sh status      # in cả dòng lệnh tiến trình đang thật sự chạy
 ```
 
-## 5. Xác nhận GỌI ĐƯỢC TOOL (bước nghiệm thu)
+`install` cần `sudo`, mặc định MCP `8765` và audio `8766`. Dòng lệnh đang dùng
+trong triển khai thật, kèm giải thích từng cờ, nằm ở `README.md` của repo, mục
+*The deployed command*.
 
-Đây là mốc "cài xong". Với transport HTTP:
+## Bước 6 — Xác nhận đã "gọi được tool"
+
+Đây là mốc nghiệm thu. Chọn một trong hai:
+
+**a) Qua client** — bảo Claude: *"liệt kê loa Google trong nhà"*. Nó phải gọi
+`list_speakers` và trả về danh sách loa.
+
+**b) Qua HTTP, không cần client** — với server chạy transport http:
 
 ```bash
-curl -s http://127.0.0.1:8765/mcp \
+curl -s -X POST http://127.0.0.1:8765/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
-       "protocolVersion":"2025-06-18","capabilities":{},
-       "clientInfo":{"name":"cli","version":"1"}}}'
-```
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}'
 
-rồi:
-
-```bash
-curl -s http://127.0.0.1:8765/mcp \
+curl -s -X POST http://127.0.0.1:8765/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 ```
 
-**Đạt khi thấy đủ 13 tool:** `say`, `discover_devices`, `list_speakers`,
-`list_devices`, `get_status`, `play_media`, `play`, `pause`, `stop`, `seek`,
-`set_volume`, `set_muted`, `quit_app`.
+Phải ra **13 tool**. Thiếu header `Accept` sẽ nhận `406 Not Acceptable` —
+đó là đúng đặc tả, không phải lỗi.
 
-Rồi gọi thật một tool không gây tiếng động:
+Cuối cùng, phát thử một câu:
 
-```bash
-curl -s http://127.0.0.1:8765/mcp \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
-       "params":{"name":"list_speakers","arguments":{}}}'
+```
+say(text="Cơm đã chín rồi", target="<tên loa>")
 ```
 
-Trả về tên loa thật trong nhà bạn ⇒ **đã dùng được**.
+Nghe được tiếng là **xong**.
 
-Cuối cùng, thử phát tiếng:
+---
 
-> "Nói 'Cơm đã chín rồi' ra loa bếp"
+## Bằng chứng đã chạy thật (2026-08-26)
 
-## 6. Tự kiểm sản phẩm
+Toàn bộ các bước trên được chạy lại từ đầu trên bản clone sạch tại
+`/tmp/dod-googlecast`, không dùng thư mục làm việc của người đóng gói:
 
-```bash
-uv run python _dong-goi/package/eval/eval-googlecast-mcp.py            # không tiếng
-uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --online   # cần internet
-uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --hardware # SẼ PHÁT TIẾNG
+```
+$ git ls-remote https://github.com/devAdrec/googlecast-mcp.git
+e6390a567dc49459928f733195769890a6ee3b81	HEAD
+e6390a567dc49459928f733195769890a6ee3b81	refs/heads/main
+
+$ git clone https://github.com/devAdrec/googlecast-mcp.git /tmp/dod-googlecast
+$ cd /tmp/dod-googlecast && uv sync        # OK
+
+# Bước 3+6 qua stdio (bắt tay MCP thật):
+initialize -> {'name': 'googlecast-mcp', 'version': '1.29.0'} 2025-06-18
+tools/list -> 13 tools: ['discover_devices', 'get_status', 'list_devices',
+  'list_speakers', 'pause', 'play', 'play_media', 'quit_app', 'say', 'seek',
+  'set_muted', 'set_volume', 'stop']
+tools/call list_speakers -> isError=False in 0.0s
+    { "friendly_name": "Kitchen speaker", "uuid": "f88d1e3f-...",
+      "model_name": "Google Home Mini", "host": "192.168.1.22",
+      "port": 8009, "cast_type": "audio" }
+
+# Bước 6b qua HTTP (cổng rỗi 8798, không đụng service thật ở 8765):
+initialize  -> 200, protocolVersion 2025-06-18
+tools/list  -> 13 tools
+GET /mcp bằng trình duyệt      -> 406   (đúng đặc tả)
+POST với Host: evil.example.com -> 421   (chặn DNS-rebinding còn nguyên)
 ```
 
-## 7. Hỏng thì xem đâu trước
+**Một điểm không tô hồng:** `list_speakers` trả kết quả trong 0.0s vì máy chạy
+thử **đã có sẵn** `~/.googlecast-mcp/speakers.json`. Trên máy trắng, lần gọi đầu
+tiên sẽ tự dò mạng và mất khoảng 5 giây. Đó là hành vi đúng, chỉ là chậm hơn con
+số ở trên.
 
-| Triệu chứng | Nguyên nhân gần như chắc chắn |
-|---|---|
-| `421 Misdirected Request` | tên miền/IP client dùng chưa có trong allowlist → thêm `--allow-host` |
-| `406 Not Acceptable` | thiếu header `Accept: application/json, text/event-stream` |
-| `Failed to fetch (check CORS?)` | client trình duyệt, thiếu `--cors-origin` khớp **chính xác** origin |
-| Client treo, không báo lỗi | nginx đang buffer → `proxy_buffering off` |
-| `URL must start with 'https'` | Claude Desktop custom connector; bắc cầu bằng `mcp-remote` |
-| `wait timed out` khi phát | thiết bị Cast treo. Kiểm `nc -z <ip> 8009` **trước** khi nghi mã nguồn; khởi động lại loa |
-| Cài lại service mà không đổi gì | dùng `./scripts/service.sh restart`, và đọc dòng "Running command line" của `status` |
-
-Chi tiết đầy đủ: `technical-docs.md` và `README.md` ở gốc repo.
+**Chưa chạy trong lần nghiệm thu này:** bước 5 (`service.sh install`) không chạy
+lại, vì service thật đang phục vụ hai máy khác và cài đè sẽ cắt dịch vụ của họ.
+Bước đó đã được kiểm chứng ở lần triển khai gốc — xem `technical-docs.md`.

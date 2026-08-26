@@ -1,83 +1,77 @@
 # Yêu cầu gốc và tiêu chí chấp nhận
 
-## 1. Ba yêu cầu, nguyên văn lời người dùng
+## Yêu cầu, nguyên văn lời người dùng
 
-Trích đúng như đã gõ, giữ nguyên lỗi chính tả — vì cách diễn đạt mới là thứ
-sinh ra sản phẩm, không phải bản diễn giải gọn gàng sau này:
+Toàn bộ product sinh ra từ một prompt duy nhất. Chép lại nguyên văn, giữ nguyên
+lỗi gõ, vì cách diễn đạt của nó chính là bài học (xem `../method-note.md`):
 
 > hãy kiểm tra xem mcp này đúng yêu cầu không:
->
 > 1. dò danh sách các google speaker trong mạng nội bộ sau đó lưu lại
 > 2. gửi tin nhắn là text  tham số truyền vào mcp sau đó chuyển thanh âm thanh hỗ trợ tiếng việt sau đó phát lên speaker theo yêu cầu
 > 3. nếu user không chọn speaker sẽ hỏi user xem phát ở speaker nào, hoặc tất cả
 
-Ba câu này là **hành vi quan sát được**, không phải mô tả kỹ thuật. Đó là lý do
-chúng dùng được làm tiêu chí nghiệm thu. Tại thời điểm nhận yêu cầu, sản phẩm
-mới đạt **1/3** (chỉ có phần dò thiết bị) — và danh sách chưa đạt chính là danh
-sách module phải viết.
+Ba yêu cầu này **đánh số** và **diễn đạt bằng hành vi quan sát được**. Đó là lý
+do đối chiếu được từng cái một, và lý do biết chắc lúc bắt đầu chỉ mới đạt 1/3.
 
-## 2. Tiêu chí chấp nhận
+## Diễn giải thành tiêu chí chấp nhận
 
-### YC1 — Dò loa trong LAN rồi lưu lại
+### YC1 — Dò và lưu loa
 
-| # | Tiêu chí | Đạt khi |
-|---|---|---|
-| 1.1 | Dò được thiết bị Google Cast qua mDNS | `discover_devices` trả về danh sách khác rỗng trên mạng thật |
-| 1.2 | **Phân biệt loa với thiết bị hình ảnh** | `list_speakers` chỉ trả `cast_type` ∈ {`audio`, `group`}; Chromecast/Nest Hub bị loại |
-| 1.3 | Lưu bền qua các lần chạy | tiến trình mới đọc được `~/.googlecast-mcp/speakers.json` mà không cần dò lại |
-| 1.4 | Lần dò sau **gộp**, không xoá | loa đang ngủ, bị một lượt mDNS bỏ sót, vẫn còn trong danh sách |
+| # | Tiêu chí | Đạt bằng | Mục eval |
+|---|---|---|---|
+| 1.1 | Dò được thiết bị Google Cast trong LAN | `discover_devices` qua mDNS | `hardware.discovers_speakers` |
+| 1.2 | Phân biệt **loa** với thiết bị hình ảnh | `cast_type` ∈ {`audio`, `group`} | `store.is_speaker`, `store.speakers_filter` |
+| 1.3 | **Lưu lại** — sống qua khởi động lại tiến trình | `~/.googlecast-mcp/speakers.json` | `store.merge_keeps_missed` |
+| 1.4 | Một lần quét sót không được xoá thiết bị đã biết | `SpeakerStore.save` gộp theo uuid | `store.merge_keeps_missed`, `store.merge_updates_fields` |
+| 1.5 | File hỏng không được làm chết server | `load()` trả `[]` | `store.corrupt_json` |
 
-> 1.2 không nằm trong lời người dùng nhưng bắt buộc phải có: người dùng nói
-> "google speaker", mà mDNS trả về mọi thiết bị Cast. Phát thông báo ra TV là
-> sai ý định.
+Điểm 1.4 không có trong lời người dùng. Nó đến từ thực tế: mDNS mất gói, và một
+lần quét thiếu mà ghi đè sẽ **xoá mất** loa vừa dùng được năm phút trước.
 
-### YC2 — Text → tiếng Việt → phát ra loa
+### YC2 — Text tiếng Việt → âm thanh → phát lên loa
 
-| # | Tiêu chí | Đạt khi |
-|---|---|---|
-| 2.1 | Nhận text làm tham số của tool | `say(text=...)` |
-| 2.2 | **Đọc được tiếng Việt nghe tự nhiên** | người dùng NGHE và xác nhận — không có bài kiểm tự động nào thay được |
-| 2.3 | Âm thanh tới được loa | loa báo `PLAYING`, chạy hết `duration`, rồi `idle_reason=FINISHED` |
-| 2.4 | Chọn được giọng và tốc độ | `voice` = `female`/`male`/id đầy đủ; `rate` = `-20%`… |
+| # | Tiêu chí | Đạt bằng | Mục eval |
+|---|---|---|---|
+| 2.1 | Nhận text làm tham số của tool | `say(text=...)` | `server.say_schema` |
+| 2.2 | Đọc được **tiếng Việt** tự nhiên | edge-tts `vi-VN-HoaiMyNeural` / `NamMinhNeural` | `online.real_render`, `online.voices_differ` |
+| 2.3 | Âm thanh **thật sự phát ra loa** | TTS → HTTP → Cast | `hardware.say_leaves_durable_trace` |
+| 2.4 | Loa phải **lấy được** file audio | HTTP server trên địa chỉ LAN | `media.serves_bytes`, `media.binds_wildcard_advertises_lan` |
+| 2.5 | Cast đúng dạng audio | `play_media(..., "audio/mpeg", ...)` | `say.casts_audio_mpeg` |
+| 2.6 | Text lặp lại không render lại | cache theo hash nội dung | `tts.cache_hit_skips_service` |
+| 2.7 | Một thông báo hỏng lẻ tẻ không được rơi mất | thử lại có giãn cách | `tts.retries_then_succeeds` |
+| 2.8 | Gọi dồn nhiều thông báo cùng lúc: **tất cả** phải ra | tuần tự hoá bằng `asyncio.Lock` | `tts.renders_are_serialised`, `online.fanout_all_survive` |
+| 2.9 | Lần render hỏng không để lại file 0 byte | `unlink` trước mỗi lần thử | `tts.no_zero_byte_residue` |
 
-> 2.2 là tiêu chí **cảm nhận**: bắt buộc con người nghe. Máy chỉ kiểm được
-> "có ra file mp3 khác rỗng", không kiểm được "nghe có như người thật không".
+2.7–2.9 là **bổ sung sau khi đo**, không phải suy đoán: gọi dồn 6 yêu cầu thì chỉ
+4 về đích, mất 101 giây, và cache đọng file rỗng. Chi tiết ở `technical-docs.md`.
 
-### YC3 — Không chọn loa thì phải HỎI, không được tự phát
+### YC3 — Không chọn loa thì phải hỏi
 
-| # | Tiêu chí | Đạt khi |
-|---|---|---|
-| 3.1 | Thiếu `target` ⇒ **không phát gì cả** | không thiết bị nào nhận media, và **TTS cũng không được gọi** |
-| 3.2 | Trả về đủ dữ liệu để LLM hỏi lại | `status="needs_speaker_selection"` + danh sách loa + thông điệp hướng dẫn |
-| 3.3 | Nhận một tên | `target="Kitchen speaker"` |
-| 3.4 | Nhận nhiều tên | `target="Kitchen speaker, Bedroom speaker"` |
-| 3.5 | Nhận "tất cả" | `target` ∈ {`all`, `tất cả`, `tat ca`, `everyone`, `*`} |
-| 3.6 | **"tất cả" không được phát chồng** | nhóm loa bị loại khỏi lượt "tất cả": nhóm phát QUA thành viên, gửi cả hai là hai luồng vào cùng một loa vật lý |
-| 3.7 | Không có loa nào | `status="no_speakers_found"`, không phát gì |
+| # | Tiêu chí | Đạt bằng | Mục eval |
+|---|---|---|---|
+| 3.1 | Thiếu loa → **không phát gì cả** | trả `needs_speaker_selection` | `say.without_target_plays_nothing` |
+| 3.2 | Trả về danh sách để client hỏi lại người dùng | `speakers` + `message` trong kết quả | `server.no_target_asks` |
+| 3.3 | Nhận **một** tên loa | `target="Kitchen speaker"` | `say.casts_audio_mpeg` |
+| 3.4 | Nhận **nhiều** tên cách nhau bằng phẩy | tách theo `,` | `server.comma_list` |
+| 3.5 | Nhận **"tất cả"** | `all` / `tất cả` / `everyone` / `*` | `server.all_excludes_groups` |
+| 3.6 | Mạng không có loa nào → nói rõ, đừng hỏi vu vơ | `no_speakers_found` | `server.no_speakers_found` |
+| 3.7 | "Tất cả" **không được** phát chồng lên một loa vật lý | bỏ nhóm loa khỏi `all` | `say.all_casts_once_per_speaker` |
 
-> 3.6 là tiêu chí đắt nhất trong tài liệu này. **API báo `playing` cho cả bốn
-> đích — kết quả thao tác không phân biệt được ca này với ca đúng.** Chỉ tai
-> người nghe ra tiếng vọng chồng lên nhau. Dấu vết máy đọc được duy nhất nằm ở
-> siêu dữ liệu thiết bị: nhóm và thành viên **cùng `host`** — và đó chính là
-> chỗ bấu víu để vá.
+3.1 là tiêu chí nghiêm nhất trong ba yêu cầu, và là chỗ dễ làm sai nhất. "Hỏi
+user" cám dỗ người ta hiểu thành "cứ phát đại rồi hỏi sau". Nhưng phát tiếng ra
+loa là **tác dụng phụ vật lý trong nhà người ta** — không hoàn tác được. Nên
+mặc định là **im lặng**, không phải phát tất cả.
 
-### Yêu cầu phát sinh trong quá trình dùng thật
+3.7 cũng không có trong lời người dùng. Nó lộ ra khi nghe bằng tai: nhóm loa Cast
+phát *qua* thành viên của nó, nên `all` gửi tới cả nhóm lẫn từng loa sẽ khiến một
+loa vật lý nhận **hai luồng**. Cả 4 lệnh đều trả `playing` — **API không phân biệt
+được**; dấu vết duy nhất nằm ở chỗ nhóm và thành viên **trùng `host`**.
 
-Không có trong ba câu ban đầu, nhưng nếu thiếu thì sản phẩm không dùng được:
+## Ngoài phạm vi (nói rõ để khỏi hiểu nhầm là thiếu sót)
 
-| # | Tiêu chí | Đạt khi |
-|---|---|---|
-| 4.1 | Chạy được như service, máy khác gọi tới | systemd unit + transport HTTP |
-| 4.2 | Client ngoài loopback không bị chặn | không còn `421`; nới allowlist chứ **không tắt** bảo vệ DNS-rebinding |
-| 4.3 | Client trình duyệt gọi được | CORS có `expose_headers=["Mcp-Session-Id"]` |
-| 4.4 | Client khắt khe về framing gọi được | `--json-response`, `--stateless` |
-| 4.5 | Một loa hỏng không kéo đổ cả lượt | loa hỏng trả `error` riêng, loa còn lại vẫn `playing`, tổng thể `ok` |
-
-## 3. Điều đã CỐ Ý không làm
-
-| Không làm | Lý do |
-|---|---|
-| MCP elicitation (server tự hỏi người dùng) | phán đoán "nhiều client chưa hỗ trợ" — **CHƯA THỬ bằng thực nghiệm**; cách đang dùng (trả dữ liệu cho LLM hỏi lại) đã chạy thật ở cả 3 client |
-| Mặc định "không chọn thì phát tất cả" | tác dụng phụ vật lý; đoán sai là cả nhà nghe |
-| Xác thực ở tầng ứng dụng | chưa làm — xem "Điểm còn hở" trong `technical-docs.md`. Không phải đã cân nhắc rồi bỏ, mà là **nợ** |
-| Khôi phục âm lượng / media đang phát sau thông báo | chưa làm |
+- **Không có xác thực ở tầng ứng dụng.** Ai vào được `/mcp` là phát được tiếng
+  trong nhà. Đây là quyết định đã biết, không phải bỏ quên — xem `technical-docs.md`.
+- Không khôi phục nhạc/âm lượng đang phát sau khi chen thông báo vào.
+- Không dọn cache TTS.
+- Không dùng MCP elicitation (client hỏi người dùng theo chuẩn) — **chưa đo trên
+  client thật**, nên đang trả dữ liệu để LLM tự hỏi lại.

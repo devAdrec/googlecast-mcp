@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import os
 import tempfile
+import weakref
 from pathlib import Path
 
 import edge_tts
@@ -25,7 +26,24 @@ DEFAULT_VOICE = VOICES["female"]
 
 # Renders run one at a time: the upstream service refuses connections that
 # arrive together, and a fan-out of announcements would otherwise mostly fail.
-_synthesis_lock = asyncio.Lock()
+_synthesis_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _synthesis_lock() -> asyncio.Lock:
+    """The render lock for the running event loop.
+
+    A single module-level Lock would bind itself to whichever loop first
+    contends for it, and then refuse every other loop — so a process that
+    calls asyncio.run() more than once breaks after the first contended
+    render. One lock per loop keeps the serialization without that trap.
+    """
+    loop = asyncio.get_running_loop()
+    lock = _synthesis_locks.get(loop)
+    if lock is None:
+        lock = _synthesis_locks[loop] = asyncio.Lock()
+    return lock
 
 
 def resolve_voice(voice: str | None) -> str:
@@ -75,7 +93,7 @@ async def synthesize(
     # is not enough — the attempts have to stop overlapping. One at a time,
     # then back off between attempts. A partial file is always cleared first,
     # since save() can create the file and then fail, leaving an empty one.
-    async with _synthesis_lock:
+    async with _synthesis_lock():
         # Another caller may have rendered it while we waited for the lock.
         if path.exists() and path.stat().st_size > 0:
             return path

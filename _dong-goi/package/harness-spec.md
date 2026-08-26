@@ -1,132 +1,96 @@
 # Harness spec — googlecast-mcp
 
-Loại: **harness vận hành** (máy móc, kết quả xác định). Không có bước nào do AI
-sinh ra output tự do, nên eval đo **đúng/sai**, không đo chất lượng.
+Loại harness: **vận hành** (máy móc, kết quả xác định). Không có bước nào do AI
+sinh ra nội dung, nên mọi mục kiểm đều pass/fail dứt khoát, không có chấm điểm
+chất lượng.
 
-Trọng số năm lớp cho loại này:
+Trọng số 5 lớp cho loại này: **Execution và Eval nặng nhất**; Context nhẹ vì
+không có prompt nào cần thiết kế; Feedback trung bình.
 
-| Lớp | Trọng số | Vì sao |
+---
+
+## Lớp 1 — Context (nhẹ)
+
+Server không sinh nội dung. "Context" ở đây là thứ nó **kể cho LLM nghe** để LLM
+quyết định đúng — và chỗ đó có một quyết định thiết kế thật sự.
+
+| Thành phần | Nội dung |
+|---|---|
+| Mô tả tool | docstring của mỗi `@mcp.tool()`; là thứ duy nhất LLM đọc để chọn tool |
+| Điểm quyết định | `say` **không** có `target` mặc định. Docstring nói thẳng: *"If `target` is omitted, no audio is played"* |
+| Kênh hỏi lại | khi thiếu loa, kết quả trả về là **dữ liệu có cấu trúc** (`status`, `speakers`, `message`) chứ không phải lỗi — để LLM biết phải hỏi người dùng rồi gọi lại |
+| Ràng buộc | `message` phải liệt kê tên loa sẵn có, nếu không LLM sẽ hỏi vu vơ |
+
+Neo bằng: `server.no_target_asks`, `server.say_schema`, `server.tool_surface`.
+
+## Lớp 2 — Tool (nhẹ)
+
+13 tool, một mặt tiếp xúc. Điều đáng kiểm không phải từng tool làm gì, mà là
+**mặt tiếp xúc không được lặng lẽ đổi**: một tool biến mất hoặc một tham số bắt
+buộc mọc thêm sẽ làm hỏng mọi client đang chạy.
+
+- `server.tool_surface` so **tập tên tường minh**, không so số lượng.
+  `len(a) == len(b)` vẫn xanh khi cả hai cùng co lại.
+- `server.say_schema` giữ `target` là **tuỳ chọn** và `text` là **bắt buộc**.
+
+## Lớp 3 — Execution (nặng)
+
+Chuỗi thật là: **text → TTS → file → HTTP → thiết bị Cast tự tải về → phát ra**.
+Ba biên giới, mỗi biên giới một kiểu hỏng riêng.
+
+| Biên | Hỏng kiểu gì | Neo bằng |
 |---|---|---|
-| Context | thấp | tool có mô tả rõ; không có prompt phức tạp cần chỉnh |
-| **Tool** | **cao** | 13 tool là toàn bộ bề mặt hợp đồng |
-| **Execution** | **cao** | tác dụng phụ VẬT LÝ — phát tiếng trong nhà |
-| **Eval** | **cao** | phần lớn hành vi phải kiểm được mà không phát tiếng |
-| Feedback | trung bình | lỗi phải nói được nguyên nhân cho người vận hành |
+| Ứng dụng → dịch vụ TTS | từ chối kết nối đến cùng lúc; file 0 byte | `tts.renders_are_serialised`, `tts.no_zero_byte_residue`, `online.fanout_all_survive` |
+| Ứng dụng → HTTP | phục vụ sai thư mục; URL không escape; bind sai địa chỉ | `media.serves_bytes`, `media.quotes_filenames`, `media.binds_wildcard_advertises_lan` |
+| HTTP → thiết bị Cast | thiết bị treo; mDNS sót; sai MIME | `cast.*`, `hardware.say_leaves_durable_trace` |
+| Client → MCP | Host không tin (421); thiếu CORS; khung SSE | `entry.*` |
 
----
+**Ba tầng tác dụng phụ**, mặc định là tầng vô hại:
 
-## Lớp 1 — Context
-
-Trợ lý chỉ có mô tả tool để hành động. Ba điều mô tả phải nói rõ:
-
-1. **Chạy `discover_devices` trước** — nói thẳng trong docstring.
-2. **Bỏ `target` thì KHÔNG phát gì** — nói thẳng, để LLM không tưởng là mặc
-   định phát tất cả.
-3. **Các dạng `target`** — một tên, nhiều tên cách phẩy, hoặc `all`.
-
-Kiểm: mọi tool có `description` khác rỗng; `say` có đúng `text` là bắt buộc.
-
-## Lớp 2 — Tool
-
-Hợp đồng: **đúng 13 tool, đúng 13 cái tên đó.**
-
-Bài kiểm so **TẬP** với `EXPECTED_TOOLS`, không so số lượng. Kiểm ngược đã gieo
-đúng lỗi bẫy: đổi tên `quit_app` → `quit_application`. **Số lượng không đổi**,
-nên một bài kiểm đếm sẽ vẫn xanh. Bài kiểm so tập thì đỏ.
-
-Ranh giới đầu vào phải giữ:
-
-| Tool | Ranh giới |
-|---|---|
-| `say` | `text` rỗng/toàn khoảng trắng → `ValueError`, **không gọi mạng** |
-| `say` | `target` rỗng → `needs_speaker_selection` |
-| `set_volume` | ngoài `[0,1]` bị kẹp, không lọt xuống thiết bị |
-| `play_media` | thiếu `content_type` → đoán từ đuôi URL |
-
-## Lớp 3 — Execution
-
-**Đây là lớp quyết định cách phân tầng bộ kiểm.** Sản phẩm có tác dụng phụ vật
-lý: nó phát ra tiếng trong nhà người khác.
-
-| Tầng | Cờ | Tác dụng phụ | Chạy được mọi lúc? |
+| Tầng | Cờ | Chạm vào gì | Ai chạy được |
 |---|---|---|---|
-| 1 — offline | *(mặc định)* | mở một cổng HTTP tạm trên máy này, đóng ngay | **Có** |
-| 2 — online | `--online` | gọi edge-tts (Microsoft), tốn hạn ngạch | Cần internet |
-| 3 — hardware | `--hardware` | **PHÁT TIẾNG THẬT** | Chỉ khi đã xin phép |
+| offline | *(mặc định)* | chỉ thư mục tạm | bất kỳ ai, bất kỳ lúc nào, CI |
+| online | `--online` | internet (dịch vụ edge-tts) | ai có mạng |
+| hardware | `--hardware` | **phát tiếng thật ra loa thật** | **phải xin phép trước** |
 
-Nguyên tắc: **tầng mặc định phải là tầng không ai ngại chạy.** Một bộ kiểm mà
-không ai dám bấm chạy thì bằng không có.
+Bài kiểm mà không ai dám chạy thì bằng không có. Vì vậy tầng mặc định phải chạy
+được ở bất cứ đâu, và hai tầng kia là **opt-in**.
 
-Ba tầng phải **cô lập** với nhau:
+## Lớp 4 — Eval (nặng)
 
-- Ảnh chụp các thuộc tính bị thay thế được lấy **TRƯỚC tầng đầu tiên**, khôi
-  phục trong `finally`.
-- Mỗi tầng, mỗi mục kiểm dựng **object MỚI**. Không thừa hưởng object của tầng
-  trước dù trông có vẻ sạch.
-- **Không dùng `importlib.reload`.** Nó thay module mới dưới chân chính cái ảnh
-  chụp đang giữ tay nắm, tức là phá luôn đường khôi phục. Đã thử, đã phải loại.
+Bộ luật bộ kiểm tự áp lên chính nó. Mỗi điều dưới đây là hệ quả của một lần
+bộ kiểm **đã từng nói dối** trong các phiên trước.
 
-## Lớp 4 — Eval
+1. **Kiểm ngược hai chiều, kỳ vọng viết TRƯỚC.** Mỗi lỗi gieo mang sẵn danh sách
+   mục *phải* đỏ. Mục nằm trong danh sách mà vẫn xanh = **TEST GIẢ**. Kèm **4 đối
+   chứng vô hại kỳ-vọng-XANH**; đối chứng làm đỏ = **đỏ bừa**, cũng phải sửa.
+2. **Đếm đủ trước khi đếm xanh.** Mỗi mục bọc riêng; lỗi hạ tầng là `ERROR`,
+   không bị nuốt. Báo cáo in `da chay X/Y muc dang ky`; `X < Y` là **FAIL toàn
+   cục**. Có `atexit` in bảng kê cả khi tiến trình chết giữa chừng.
+3. **Mỗi mục phải chạm mã sản phẩm** và phải nằm trong **≥1 danh sách kỳ-vọng-đỏ**.
+   `reverse-check.py` in ra mục nào **CHƯA PHỦ**.
+4. **So TẬP tường minh, không so kích thước.** `expect_set` báo rõ thiếu gì / thừa gì.
+5. **Test giả ≠ kỳ vọng sai.** Kỳ vọng sai thì sửa kỳ vọng **theo requirement,
+   kèm trích nguồn**; cấm nới cho xanh.
+6. **Async: mốc chờ + bằng chứng bền.** Điều kiện chờ phải là dấu vết còn lại
+   *sau khi* việc xong (`content_id`, file trên đĩa, số đếm), không phải trạng
+   thái thoáng qua.
+7. **Vệ sinh mock.** `swap()`/`swap_item()` luôn khôi phục; một **residue guard**
+   so lại danh tính gốc sau **mỗi** mục và quy lỗi cho đúng mục làm rò. Không
+   dùng `importlib.reload`.
+8. **Hoàn nguyên = chạy lại thấy XANH**, không phải nhìn `git status`.
+   `reverse-check.py` gieo lỗi vào **bản sao** dưới thư mục tạm, đặt
+   `PYTHONDONTWRITEBYTECODE=1`, và **không bao giờ ghi vào cây sản phẩm**.
 
-Ba luật, mỗi luật rút từ một lỗi thật đã dính:
+## Lớp 5 — Feedback (trung bình)
 
-### Luật 1 — So TẬP KỲ VỌNG tường minh, không so kích thước
-
-Dạng test giả phổ biến nhất là **so đếm/độ dài thay cho so tập**.
-
-Ca thật đã dính: `len(hosts) == len(set(hosts))` để kiểm "`all` không phát chồng
-lên một loa". Nó **vẫn xanh** khi `all` sai thành đúng một phần tử — một phần tử
-thì không thể trùng. Bản thay thế so `{(tên, host)}` với `EXPECTED_ALL`.
-
-Cách tự soát: mọi mục kiểm dạng `len(...)`, `count`, `>=` phải trả lời được câu
-"có hình dạng SAI nào khiến con số này vẫn đúng không?".
-
-### Luật 2 — Eval phải từng ĐỎ, với kỳ vọng khai TRƯỚC
-
-`reverse-check.py` gieo 12 lỗi + 1 đối chứng vô hại. Mỗi lỗi khai trước danh
-sách mục **lẽ ra phải đỏ**. Sau khi chạy:
-
-- lẽ-ra-đỏ-mà-xanh → **TEST GIẢ**, phải sửa bài kiểm hoặc ghi **CHƯA PHỦ**;
-- đối chứng vô hại mà làm đỏ → bài kiểm đang bám vào thứ không phải hành vi.
-
-### Luật 3 — Hoàn nguyên = CHẠY LẠI EVAL THẤY XANH
-
-**`git status` sạch KHÔNG phải bằng chứng hoàn nguyên.** Một lỗi gieo vào dài
-đúng bằng bản gốc để lại `.pyc` cũ: git thấy sạch mà eval vẫn đỏ. Quy trình
-đúng: khôi phục → **xoá `__pycache__`** → chạy lại eval → đòi thấy XANH.
-
-### Luật 4 — Khẳng định bất đồng bộ phải có MỐC CHỜ
-
-Mọi khẳng định chạm mạng/thiết bị phải đi kèm timeout + điều kiện thoả, qua
-`wait_until()`.
-
-Ca thật đã dính: đọc `player_state` ngay khoảnh khắc `play_media` trả về. Hàm đó
-chỉ chờ **ứng dụng trên thiết bị khởi động**, chưa chờ nó **phát** → FAIL
-`Kitchen speaker reports IDLE` dù loa hoàn toàn tốt. Không có mốc chờ nghĩa là
-đang đo tốc độ mạng chứ không đo hành vi.
-
-## Lớp 5 — Feedback
-
-Lỗi phải nói được **nguyên nhân**, vì người đọc nó là người đang sửa mạng nhà
-mình lúc 11 giờ đêm:
-
-| Tình huống | Thông điệp phải chứa |
+| Ai nhận | Nhận cái gì |
 |---|---|
-| Không tìm thấy thiết bị | tên đã gõ **và** danh sách tên đang biết |
-| Một loa hỏng trong lượt nhiều loa | mục `error` **riêng cho loa đó**, các loa khác vẫn `playing` |
-| Thiếu chọn loa | danh sách loa **và** lời hướng dẫn LLM hỏi lại |
-| Không có loa nào | phân biệt rõ với "thiếu chọn loa" (`no_speakers_found`) |
+| LLM | `needs_speaker_selection` + danh sách loa + câu hướng dẫn gọi lại |
+| Người dùng | kết quả **theo từng loa**: loa nào `playing`, loa nào `error` và vì sao |
+| Người vận hành | `service.sh status` in dòng lệnh tiến trình **đang thật sự chạy** |
+| Người bảo trì | `eval/README.md` — bộ kiểm đã đỏ ở đâu, và chỗ nào còn chưa phủ |
 
-Đây là lý do `_select_targets` trả về hai trạng thái khác nhau chứ không gộp
-một: "chưa chọn" và "không có gì để chọn" cần hai hành động khác nhau.
-
----
-
-## Điều harness này CỐ Ý không phủ
-
-- **Chất lượng giọng đọc.** Không đo được bằng máy. Bắt buộc người nghe.
-- **Tiếng chồng luồng.** API báo `playing` cho mọi đích; chỉ tai người nghe ra.
-  Bài kiểm chốt được *quy tắc chọn đích* (qua dấu vết trùng `host`), nhưng
-  không chốt được *âm thanh thật sự phát ra*.
-- **nginx / TLS.** Eval kiểm allowlist mà tiến trình sinh ra, không dựng nginx.
-- **Nhánh `_connect_saved` thành công.** Cần thiết bị Cast thật.
+Nguyên tắc: **thất bại một phần phải nhìn thấy được**. `say()` gọi 3 loa, 1 loa
+chết, thì kết quả không được là "ok" trơn cũng không được là "failed" trơn —
+phải là `ok` kèm bảng chi tiết chỉ đúng con nào hỏng.
