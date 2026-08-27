@@ -1,93 +1,97 @@
-# Dùng googlecast-mcp hằng ngày
+# Sổ tay dùng googlecast-mcp
 
-Cài đặt: `README.md` trong gói này. Tờ này là lúc mọi thứ đã chạy.
+Dành cho người đã cài xong (`README.md`) và giờ muốn dùng.
 
-## Việc thường làm nhất
+Cách dùng thường ngày là **nói với AI bằng tiếng Việt**, AI chọn tool. Bảng
+tool dưới đây để tra khi cần biết chính xác nó làm gì.
 
-Nói với Claude bằng tiếng Việt bình thường:
+---
 
-> *"Nói ở loa bếp: cơm đã chín rồi"*
-> *"Báo tất cả các loa: 5 phút nữa đi học"*
-> *"Có những loa nào trong nhà?"*
+## Việc hay làm nhất: cho loa nói một câu
 
-Claude tự chọn tool. Không cần nhớ tên tool.
+> "Nói 'Cơm đã chín rồi' ở loa bếp"
 
-## Nếu không nói rõ loa
+AI gọi `say(text="Cơm đã chín rồi", target="Kitchen speaker")`.
 
-Server **sẽ không phát gì cả**. Nó trả về danh sách loa và nhờ client hỏi lại
-bạn. Đây là cố ý: phát tiếng ra loa là việc **không hoàn tác được** trong nhà
-người khác, nên im lặng là mặc định an toàn.
+**Không nói rõ loa nào thì sẽ bị hỏi lại, và không có tiếng nào phát ra.** Đó
+là cố ý, không phải trục trặc: âm thanh đã ra khỏi loa thì không thu lại được,
+nên mặc định là *không phát gì* chứ không phải *phát tất cả*.
 
-Trả lời bằng: một tên loa, nhiều tên cách nhau bằng phẩy, hoặc `tất cả`.
+> "Nói 'Tới giờ đi học rồi' ở tất cả loa"
 
-## Bảng tool
+Nhận cả `all` lẫn `tất cả`. `all` **cố tình bỏ qua nhóm loa** — nhóm phát qua
+chính các thành viên của nó, gộp cả hai thì một loa vật lý nhận hai luồng
+chồng nhau. Muốn phát vào một nhóm thì gọi thẳng tên nhóm.
+
+Nhiều loa cụ thể: ngăn cách bằng dấu phẩy — `target="Kitchen speaker, Bedroom speaker"`.
+
+## 13 tool
+
+### Nói và tìm loa
+
+| Tool | Làm gì | Tham số đáng chú ý |
+|---|---|---|
+| `say` | text → giọng nói → phát lên loa | `text`; `target` (tên loa / nhiều tên cách phẩy / `all` / `tất cả`); `voice` = `female` (mặc định) hoặc `male`; `rate` vd `-20%`, `+10%` |
+| `discover_devices` | quét mạng tìm thiết bị Cast | `timeout` giây, mặc định 5 |
+| `list_speakers` | liệt kê **loa** đã biết (bỏ thiết bị hình ảnh) | tự quét một lần nếu chưa biết gì |
+| `list_devices` | liệt kê **mọi** thiết bị đã biết, kể cả TV/Nest Hub | — |
+
+`list_speakers` đọc từ danh sách đã lưu nên trả lời ngay. `discover_devices`
+mới thật sự quét mạng — dùng khi vừa thêm loa mới.
+
+### Điều khiển phát
 
 | Tool | Làm gì |
 |---|---|
-| `say(text, target?, voice, rate)` | **Nói thành tiếng.** Bỏ `target` → hỏi lại, không phát. |
-| `discover_devices(timeout=5.0)` | Quét mạng và lưu lại thiết bị. |
-| `list_speakers()` | Chỉ loa và nhóm loa (không TV). Tự quét nếu chưa có gì. |
-| `list_devices()` | Mọi thiết bị đã biết. |
-| `get_status(target)` | Đang phát gì, âm lượng bao nhiêu. |
-| `play_media(target, url, content_type?, title?)` | Phát một URL media. |
-| `play` / `pause` / `stop` (target) | Điều khiển phát. |
-| `seek(target, position_seconds)` | Nhảy tới vị trí. |
-| `set_volume(target, level)` | Âm lượng 0.0–1.0 (tự kẹp về khoảng này). |
-| `set_muted(target, muted)` | Tắt / bật tiếng. |
-| `quit_app(target)` | Thoát app, trả thiết bị về màn hình chờ. |
+| `play_media` | cast một URL media bất kỳ (loa **tự đi tải** URL đó) |
+| `play` / `pause` / `stop` | tiếp tục / tạm dừng / dừng hẳn |
+| `seek` | nhảy tới giây thứ N |
+| `get_status` | app đang chạy, trạng thái media, âm lượng |
+| `set_volume` | đặt mức tuyệt đối 0.0–1.0 (ngoài khoảng thì bị kẹp lại) |
+| `set_muted` | tắt / bật tiếng |
+| `quit_app` | đóng app, trả thiết bị về màn hình chờ |
 
-`target` là **tên thân thiện** của thiết bị (ví dụ `"Kitchen speaker"`) hoặc
-`uuid` của nó.
+`play_media` cần URL mà **loa** với tới được, không phải máy bạn. URL
+`localhost` là vô nghĩa với loa.
 
-## Chi tiết đáng biết về `say`
+## Giọng nói
 
-- **Giọng**: `voice="female"` (`vi-VN-HoaiMyNeural`, mặc định) hoặc `"male"`
-  (`vi-VN-NamMinhNeural`), hoặc bất kỳ id giọng edge-tts nào.
-- **Tốc độ**: `rate="-20%"` chậm lại, `"+10%"` nhanh lên.
-- **`tất cả`** chỉ phát ra **từng loa riêng lẻ**, cố ý bỏ qua nhóm loa. Nhóm loa
-  phát *qua* thành viên của nó, nên gửi cả hai sẽ khiến một loa nhận hai luồng.
-  Muốn dùng nhóm thì **gọi thẳng tên nhóm**.
-- **Câu lặp lại là tức thì**: đã render một lần thì lần sau lấy từ cache.
-- **Cần internet** để render giọng (dịch vụ neural của Microsoft, không cần key).
-- Một loa chết **không kéo đổ** cả lệnh: các loa còn lại vẫn phát, loa hỏng được
-  báo riêng trong `results`.
-
-## Vận hành service
-
-```bash
-./scripts/service.sh status      # đang chạy không, và chạy bằng dòng lệnh nào
-./scripts/service.sh logs        # theo dõi journal
-./scripts/service.sh restart     # nạp lại sau khi sửa
-./scripts/service.sh remove      # gỡ hẳn
-```
-
-**Luôn dùng `status` sau khi đổi bất cứ thứ gì**, và đọc dòng
-*"Running command line"*. Unit file có thể đã đúng trong khi tiến trình đang chạy
-vẫn là bản cũ — chuyện này từng kéo dài **ba ngày**.
-
-## Chẩn lỗi
-
-| Triệu chứng | Nguyên nhân và cách xử |
+| Chọn | Giọng |
 |---|---|
-| `say` trả `needs_speaker_selection` | Đúng như thiết kế: bạn chưa chọn loa, nên chưa phát gì. |
-| Không tìm thấy loa nào | Server không cùng LAN với loa, hoặc mDNS bị chặn giữa các VLAN. |
-| `Execution of wait timed out after 10 s` cho **một** thiết bị | Thiết bị đó không nhận kết nối cast. Kiểm `nc -z <ip> 8009` **trước khi** nghi ngờ code. Nest Hub ở trạng thái này thường **khởi động lại là hết**. |
-| Loa nhận lệnh nhưng im lặng | Nó không với tới được cổng audio. Kiểm firewall, và kiểm URL quảng bá có phải địa chỉ LAN không. |
-| Màn hình loé rồi tắt, âm thanh cụt | Gọi `get_status` liên tục trong lúc phát. Nếu `player_state=PLAYING` đủ `duration` rồi kết thúc bằng `idle_reason=FINISHED` thì **phía cast không có lỗi** — nghi thiết bị (âm lượng, hoặc trạng thái không ổn định sau khi restart). |
-| Mở `/mcp` bằng trình duyệt ra `Not Acceptable: Client must accept text/event-stream` | **Bình thường.** Endpoint không phải để duyệt web; câu trả lời này chứng tỏ server đang khoẻ. |
-| `421 Misdirected Request` | `Host` chưa được tin. Thêm bằng `--allow-host <tên>`. |
-| Client nối được nhưng gọi thì treo | Có proxy đang đệm. Đặt `proxy_buffering off`. |
-| Client báo "protocol error" chung chung | Nó không đọc được khung SSE hoặc không mang session header. Chạy server với `--json-response --stateless`. |
-| Client trình duyệt báo `Failed to fetch (check CORS?)` | Thiếu `--cors-origin`. Giá trị phải **khớp chính xác thanh địa chỉ** — scheme, host, port, không path. Trang chạy ở cổng 80/443 gửi origin **không kèm cổng**. |
+| `female` (mặc định) | `vi-VN-HoaiMyNeural` |
+| `male` | `vi-VN-NamMinhNeural` |
+| tên đầy đủ bất kỳ | truyền thẳng cho edge-tts, vd `en-US-AriaNeural` |
 
-## Điều nên biết về an toàn
+`rate` chỉnh tốc độ: `rate="-20%"` chậm lại, `rate="+10%"` nhanh lên.
 
-Endpoint **không có xác thực**. Ai với tới `/mcp` là phát được tiếng trong nhà
-bạn. Nếu tên miền phân giải công khai ra internet, hãy chặn trong nginx:
+Mỗi tổ hợp (nội dung, giọng, tốc độ) được cache trên đĩa, nên câu lặp lại phát
+ngay không phải render lại.
 
-```nginx
-allow 192.168.0.0/16;
-deny all;
-```
+*Giọng nam và tham số `rate` chưa được nghe kiểm bằng tai — chúng chạy, nhưng
+chưa ai xác nhận nghe có ổn không.*
 
-Và nhớ: dòng đó **chỉ che cổng MCP 8765**. Cổng audio **8766** vẫn mở cho cả LAN.
+## Khi có chuyện
+
+| Thấy gì | Làm gì |
+|---|---|
+| AI hỏi "phát ở loa nào?" | đúng như thiết kế — trả lời tên loa, hoặc `tất cả` |
+| Báo `no_speakers_found` | chạy `discover_devices`. Vẫn không thấy: máy chủ có cùng LAN với loa không? |
+| Một loa báo `error`, loa khác vẫn phát | phần tử hỏng được cô lập có chủ đích. Xem `error` của riêng loa đó |
+| `wait timed out` với một thiết bị | thiết bị treo. Kiểm `nc -z <ip> 8009`. Khởi động lại thiết bị |
+| Màn hình loa nháy sáng rồi tắt, **không có tiếng** | loa không tải được file: cổng audio (8766) chưa mở cho LAN |
+| Đổi tên loa trong app Google Home rồi gọi không được | chạy lại `discover_devices` |
+| Loa đổi IP | nhánh xử lý này **chưa từng được thử**. Chạy `discover_devices` là cách chắc nhất |
+
+## Nên biết
+
+- **Thông báo cắt ngang nhạc đang phát và không trả lại.** Chưa có chức năng
+  khôi phục âm lượng/media cũ.
+- **Hai `say` liên tiếp vào một loa**: cái sau cắt cái trước, không xếp hàng.
+- **Cache audio không tự dọn.** Thư mục
+  `${GOOGLECAST_MCP_CACHE:-/tmp/googlecast-mcp-tts}` chỉ tăng — xoá tay khi cần.
+- **Không có xác thực.** Ai tới được cổng đều gọi được tool, kể cả `say`. Nếu
+  server đang phơi ra internet, xem mục "Khiếm khuyết còn mở" trong
+  `technical-docs.md` trước khi để nguyên như vậy.
+- **`say` trả về trước khi loa phát xong** — với clip ngắn, có khi loa đã phát
+  xong trước cả lúc lệnh trả về. Trạng thái `get_status` ngay sau đó có thể
+  đã là "xong rồi", không phải "đang phát".

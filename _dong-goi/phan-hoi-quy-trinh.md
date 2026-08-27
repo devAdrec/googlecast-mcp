@@ -1,144 +1,100 @@
-# Phản hồi quy trình đóng gói — từ phiên googlecast-mcp, 2026-08-26
+# Phản hồi cho quy trình đóng gói (bản solo v1.8)
 
-Gửi người bảo trì bản chuẩn `dong-goi-product` trong vault Adrec. Đây là đề xuất
-vá **bản vault**, rồi tái sinh bản solo — không sửa file quy trình tại chỗ.
+Chuyển về người bảo trì bản gốc trong vault Adrec để vá bản chuẩn rồi tái sinh
+bản solo. **Không sửa file quy trình từ phía phiên này.**
 
-Bản dùng trong phiên: **solo v1.7** (sinh từ vault v1.7).
-
----
-
-## 1. Thêm một họ TEST GIẢ thứ bảy: **khẳng định ngoài vòng đời bằng chứng**
-
-**Mức: nên vá.** Đây là lỗi đã xảy ra thật trong phiên này.
-
-v1.7 liệt kê các dạng test giả: so kích thước, sập giữa chừng, không chạm sản
-phẩm. Thiếu một dạng nữa, và nó gây **đỏ bừa** chứ không phải xanh giả:
-
-```python
-with tmpdir() as d:
-    paths = await render_everything(cache_dir=d)
-good = [p for p in paths if p.exists()]     # ← d ĐÃ BỊ XOÁ ở dòng trên
-assert len(good) == 6                        # → 0/6, trong khi product hoàn toàn đúng
-```
-
-Mục `online.fanout_all_survive` báo **0/6** trong khi chạy tay đúng đoạn đó ra
-**6/6 trong 15.6 giây**. Suýt nữa thì bị ghi thành "khiếm khuyết product".
-
-**Đề xuất câu luật:** *"Bằng chứng nằm ở đâu thì phép khẳng định phải sống trong
-cùng vòng đời với chỗ đó. Thư mục tạm, kết nối, tiến trình con — đóng trước khi
-đếm là đếm vào chỗ trống."*
-
-Nó ghép tự nhiên vào luật số (4) hiện có về **bằng chứng bền**: v1.7 mới lo
-bằng chứng *biến mất theo thời gian*, chưa lo bằng chứng *biến mất theo phạm vi*.
-
-## 2. Kiểm ngược: gieo lỗi vào **bản sao**, đừng sửa cây sản phẩm
-
-**Mức: nên vá — nâng cấp thẳng, không chỉ là gợi ý.**
-
-v1.7 nói "gieo lỗi rồi hoàn nguyên", và phải thòng thêm luật (7) *"hoàn nguyên =
-chạy lại eval thấy XANH sau khi xoá bytecode"* để chống rò `.pyc`.
-
-Cách mạnh hơn: **không bao giờ ghi vào cây sản phẩm.** Sao `src/` + file cấu hình
-sang thư mục tạm mới cho **mỗi** case, gieo lỗi ở đó, chạy eval với
-`PYTHONPATH` trỏ vào bản sao và `PYTHONDONTWRITEBYTECODE=1`.
-
-Khi đó hoàn nguyên là **hệ quả của cấu trúc**, không phải của trí nhớ hay kỷ luật.
-Rủi ro "quên hoàn nguyên rồi commit lỗi gieo vào product" biến mất hoàn toàn.
-Luật (7) vẫn giữ, nhưng thành **bước xác nhận cuối** (chạy lại trên cây nguyên
-vẹn, đòi XANH) chứ không còn là hàng phòng thủ duy nhất.
-
-Đã làm thật ở `_dong-goi/package/eval/reverse-check.py`, chạy 49 case sạch.
-
-## 3. "Mục xanh dù gieo lỗi" **không phải lúc nào cũng là test giả**
-
-**Mức: nên vá — luật hiện tại kết tội oan.**
-
-v1.7 viết: *lẽ-ra-đỏ-mà-xanh = TEST GIẢ*. Phiên này gặp **ba** trường hợp xanh, và
-chỉ **một** là test giả thật:
-
-| Trường hợp | Sự thật | Phải làm gì |
-|---|---|---|
-| bỏ `server_close()` mà eval vẫn xanh | `SO_REUSEADDR` + refcount **che mất** lỗi gieo — lỗi này *không quan sát được từ bên ngoài* | đổi **lỗi gieo**, không đổi bài kiểm |
-| tắt lần kiểm cache thứ nhất mà vẫn xanh | lần kiểm **thứ hai** vẫn bắt được → đây là hồi quy **hiệu năng**, không phải correctness | gieo cả hai chỗ; ghi giới hạn vào eval/README |
-| mục `no_speakers_found` xanh dù `say` mặc định phát tất cả | **KỲ VỌNG SAI**: nhánh mạng-rỗng trả về ở dòng trước đoạn bị gieo lỗi | sửa **kỳ vọng**, trích nguồn dòng mã |
-
-Chỉ trường hợp thứ ba mới thuộc luật (3) hiện có. Hai trường hợp đầu là loại thứ
-tư: **lỗi gieo không quan sát được**.
-
-**Đề xuất:** tách thành ba nhánh định đoạt thay vì hai —
-*test giả* (bài kiểm sai) / *kỳ vọng sai* (kỳ vọng sai) / **lỗi gieo không quan
-sát được** (lỗi gieo sai — đổi lỗi gieo, hoặc ghi CHƯA PHỦ kèm cơ chế che).
-Không có nhánh thứ ba thì người làm sẽ bị đẩy tới chỗ *sửa bài kiểm cho nó đỏ*,
-tức là làm bài kiểm tệ đi để thoả một luật.
-
-## 4. B4 phải chạy **sau khi** mọi file trong `_dong-goi/` đã tồn tại
-
-**Mức: nên vá — lỗi thứ tự, rẻ mà hay tái phạm.**
-
-Phiên này giao B4 cho evaluator **song song** với lúc còn đang viết
-`reproduction-prompt.md`. Evaluator đọc note, thấy bảng "Đi tiếp" trỏ sang file đó,
-kiểm tra, thấy **không tồn tại**, và ghi nó thành **lỗ hổng nặng nhất**. File được
-viết xong vài phút sau đó — lỗ hổng tự tan, nhưng đã tốn một vòng chấm.
-
-**Đề xuất:** B4 ghi rõ *"chỉ giao evaluator khi mọi file được method note trỏ tới
-đã tồn tại trên đĩa"*. Kèm một bước kiểm rẻ: quét mọi đường dẫn trong note và
-xác nhận nó tồn tại, **trước** khi gọi evaluator.
-
-## 5. DoD cần ô "bước nào KHÔNG chạy lại được, và vì sao"
-
-**Mức: nên vá.**
-
-v1.7 nói *"chạy lại từng lệnh README, dán output vào B6"*. Nhưng có bước **cố ý
-không được chạy lại**: `./scripts/service.sh install` sẽ cài đè lên service thật
-đang phục vụ hai máy khác — chạy lại là **cắt dịch vụ của người đang dùng**.
-
-Luật hiện tại đẩy người làm vào thế nhị nguyên xấu: hoặc chạy và gây hại, hoặc
-lặng lẽ bỏ qua rồi báo `package: CÓ`.
-
-**Đề xuất:** DoD có ba trạng thái cho mỗi bước, không phải hai —
-**đã chạy lại** (kèm output) / **không chạy lại được** (kèm *lý do* + *đã kiểm
-chứng ở đâu trước đó*) / **chưa chạy** (= thiếu sót thật). Trạng thái giữa là hợp
-lệ; trạng thái thứ ba thì không.
-
-## 6. B6 thiếu ô "khiếm khuyết product phát hiện trong phiên, CHƯA vá"
-
-**Mức: nên vá.**
-
-Viết bộ eval làm lộ ra một khiếm khuyết thật của product: `tts._synthesis_lock` là
-`asyncio.Lock` tạo ở **mức module**, nên nó gắn vào **vòng lặp sự kiện đầu tiên
-tranh chấp nó**; ai chạy `asyncio.run()` hai lần trong một tiến trình sẽ hỏng
-synthesize vĩnh viễn từ lần thứ hai.
-
-Phiên này **bị cấm sửa mã sản phẩm**, nên nó không thể được vá ở đây — đúng luật.
-Nhưng B6 v1.7 không có chỗ nào để báo cáo nó. Nó phải chui vào `technical-docs.md`
-mục "còn mở" mới không rơi mất.
-
-**Đề xuất:** thêm trường B6: `khiếm khuyết mới phát hiện: <có/không>` — nếu có thì
-liệt kê + nơi đã ghi + định đoạt (*vá ngay / ngoài phạm vi, đã ghi vào đâu*).
-Đóng gói thường là lần đầu product bị soi nghiêm túc; phát hiện khiếm khuyết ở
-bước này là **chuyện bình thường**, và quy trình nên có sẵn ô cho nó.
-
-## 7. Nhỏ: `--only` khớp chuỗi con, khớp 0 case mà vẫn báo ĐẠT
-
-**Mức: đã tự vá trong phiên, ghi lại làm ví dụ.**
-
-Cờ lọc của `reverse-check.py` ban đầu khớp 0 case vẫn in `KET QUA: DAT`. Đúng
-tinh thần luật "đếm đủ trước khi đếm xanh", nhưng luật đó v1.7 chỉ áp cho **bộ
-eval**, không áp cho **công cụ kiểm ngược**.
-
-**Đề xuất:** mở rộng luật (2) sang mọi công cụ trong `eval/`: *"không có gì để
-chứng minh thì không được báo ĐẠT"*.
+Nguồn: phiên đóng gói `googlecast-mcp` ngày 2026-08-27, chạy bản
+`dong-goi-solo-agent` sinh từ vault v1.8.
 
 ---
 
-## Tóm tắt định đoạt đề xuất
+## 1. Chi phí chạy kiểm ngược tăng theo tích số, không theo tổng
 
-| # | Nội dung | Mức |
-|---|---|---|
-| 1 | Họ test giả thứ bảy: khẳng định ngoài vòng đời bằng chứng | nên vá |
-| 2 | Kiểm ngược gieo lỗi vào bản sao, không sửa cây sản phẩm | nên vá |
-| 3 | Tách nhánh thứ ba: **lỗi gieo không quan sát được** | nên vá |
-| 4 | B4 chỉ chạy sau khi mọi file được trỏ tới đã tồn tại | nên vá |
-| 5 | DoD ba trạng thái, có ô "không chạy lại được + lý do" | nên vá |
-| 6 | B6 thêm ô "khiếm khuyết mới phát hiện, chưa vá" | nên vá |
-| 7 | Luật "đếm đủ" áp cho mọi công cụ trong `eval/`, không chỉ bộ eval | nhỏ |
+**Quan sát.** `reverse-check.py` chạy trọn bộ eval cho **mỗi** lỗi gieo. Với 68
+lỗi gieo × ~10 giây một lượt eval, một lần kiểm ngược mất khoảng **12 phút**.
+Luật "phủ ngược đầy đủ" (mọi mục eval phải nằm trong ≥1 danh sách kỳ-vọng-đỏ)
+đẩy số lỗi gieo lên xấp xỉ số mục eval, nên chi phí là **số mục × thời gian
+một lượt eval** — tích số, không phải tổng.
+
+**Vì sao đáng vá.** Bộ kiểm mà chạy mất 12 phút thì sẽ không được chạy thường
+xuyên, và chính spec đã nói "bài kiểm không ai dám chạy thì bằng không có".
+Luật đúng, nhưng cách thi hành ngây thơ tự phá luật khác của mình.
+
+**Đề xuất.** Thêm vào B5 một câu về cách thi hành: cho phép kiểm ngược **chỉ
+chạy tập mục liên quan** (`--only <danh sách id>`) trong lượt thường, và giữ
+lượt chạy đầy đủ cho mốc đóng gói. Điều kiện: lượt rút gọn vẫn phải in "đã
+chạy X/Y" của **cả hai** chiều — số mục eval đã chạy và số lỗi gieo đã chạy —
+để rút gọn không hoá trang thành đầy đủ.
+
+## 2. "Đối chứng vô hại" cần một định nghĩa chặt hơn
+
+**Quan sát.** Spec đòi ≥1 đối chứng kỳ-vọng-XANH, nhưng không nói *vô hại tới
+mức nào*. Thêm một dòng chú thích là vô hại tới mức không kiểm được gì: nó
+không đi qua bất kỳ nhánh nào. Phải cố ý chọn một thay đổi **có sửa mã thật
+đang chạy** mà không đổi hành vi (ví dụ đổi tên biến cục bộ trong một vòng lặp
+đang được nhiều mục eval đi qua) thì đối chứng mới có sức nặng.
+
+**Đề xuất.** Trong B5 mục (1), đổi "kèm ≥1 đối chứng vô hại kỳ-vọng-XANH"
+thành: "kèm ≥1 đối chứng vô hại **đi qua mã đang được ít nhất một mục eval
+thực thi** (đổi tên biến cục bộ, tách biểu thức) — chú thích và khoảng trắng
+không tính".
+
+## 3. Thiếu một dạng TEST GIẢ đã gặp thật: vá bằng cách gán đè lên chính thứ đang gọi
+
+**Quan sát.** Spec liệt kê ba dạng test giả (so kích thước / sập giữa chừng /
+không chạm sản phẩm). Phiên này dẫm phải một dạng thứ tư: để rút ngắn thời gian
+chờ giữa các lần thử lại, bài kiểm gán `module.sleep = lambda: sleep(...)` —
+nhưng `module.asyncio` và `asyncio` của bài kiểm là **cùng một đối tượng
+module**, nên hàm tự gọi chính nó. Lỗi hiện ra ở ba mục chẳng liên quan, dưới
+dạng vừa FAIL vừa ERROR, và mất một vòng chẩn đoán mới thấy.
+
+Đây họ hàng gần với luật "vệ sinh mock" nhưng khác về cơ chế: không phải quên
+khôi phục, mà là **thay thế đệ quy** — bản thay thế trỏ về chính chỗ nó vừa
+thay.
+
+**Đề xuất.** Thêm vào B5 mục (5): "cấm gán đè lên chính hàm mà bản thay thế sẽ
+gọi lại — bọc bằng một lớp proxy, đừng gán đè; module là đối tượng dùng chung,
+`a.f = lambda: a.f()` là vòng lặp vô hạn chứ không phải bản vá".
+
+## 4. Ba trạng thái DoD nên có thêm một ô "kiểm chứng bằng đường khác"
+
+**Quan sát.** v1.8 cho ba trạng thái: đã-chạy-lại / không-chạy-lại-được /
+chưa-chạy. Phiên này gặp một bước rơi vào khoảng giữa: `service.sh install`
+không chạy lại được (cài đè cắt dịch vụ đang phục vụ hai máy khác), **nhưng**
+mục tiêu mà nó phục vụ — "gọi được tool" — vẫn kiểm chứng được **bằng một
+đường khác** (dựng một tiến trình mới ở cổng rỗi, initialize + tools/list; và
+gọi tool thật qua client đã đăng ký).
+
+Trạng thái "không-chạy-lại-được" hiện gộp chung hai tình huống rất khác nhau:
+*bước này không kiểm chứng được gì cả* và *bước này kiểm chứng được bằng đường
+khác, đây là bằng chứng*. Gộp lại làm báo cáo DoD yếu hơn thực tế.
+
+**Đề xuất.** Tách trạng thái giữa thành hai: **không-chạy-lại-được-nhưng-đã-
+kiểm-bằng-đường-khác** (+ mô tả đường thay thế + output) và
+**không-chạy-lại-được-và-chưa-có-đường-nào** (= vẫn là thiếu sót, chỉ khác là
+có lý do chính đáng).
+
+## 5. Nên nói rõ: tài liệu gói được phép ghi lại NGÕ CỤT gặp trong chính phiên đóng gói
+
+**Quan sát.** Phiên này tái hiện sống ngõ cụt "`pkill -f <mẫu>` khớp luôn lệnh
+bash đang chạy → tự giết shell (exit 144)" — đúng lúc dọn tiến trình thử
+nghiệm. Nó nằm sẵn trong gói bàn giao như một bài học từ phiên gốc, và vừa
+được xác nhận lại.
+
+Spec không cấm, nhưng cũng không nhắc, nên dễ bị bỏ qua: bằng chứng thu được
+**trong lúc đóng gói** cũng là dữ liệu thật của product, không phải nhiễu.
+
+**Đề xuất.** Thêm một câu vào B6: "quan sát thu được trong chính phiên đóng gói
+(ngõ cụt tái hiện, con số đo lại được) là dữ liệu hợp lệ — ghi vào bảng 'cách
+đã kiểm chứng' với ghi chú nguồn, đừng bỏ".
+
+## 6. Tiền điều kiện B4 nên quét cả đường dẫn *bên trong* file được trỏ tới
+
+**Quan sát.** v1.8 đã thêm "quét đường dẫn note trỏ tới, đảm bảo mọi file đã
+tồn tại trước khi giao evaluator" — tốt, và phiên này áp dụng được ngay. Nhưng
+method note trỏ sang `package/README.md`, mà file đó lại trỏ tiếp sang
+`eval/README.md` và `docs/architecture.md`. Evaluator đọc theo chuỗi trỏ và có
+thể gặp mắt xích chết ở tầng hai.
+
+**Đề xuất.** Đổi tiền điều kiện B4 thành quét **bắc cầu một tầng**: mọi đường
+dẫn trong note, **và** mọi đường dẫn trong các file mà note trỏ tới.

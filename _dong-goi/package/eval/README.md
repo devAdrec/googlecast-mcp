@@ -1,173 +1,149 @@
-# Bộ kiểm googlecast-mcp
+# Bài kiểm googlecast-mcp — và cách nó tự chứng minh
 
 Hai file:
 
 | File | Việc |
 |---|---|
-| `eval-googlecast-mcp.py` | chạy các mục kiểm trên product |
-| `reverse-check.py` | chứng minh bộ kiểm **có thể đỏ** — và **không đỏ bừa** |
-
-Cái thứ hai quan trọng ngang cái thứ nhất. **Bộ kiểm chưa từng đỏ là bộ kiểm chưa
-chứng minh được gì.**
-
-## Chạy
+| `eval-googlecast-mcp.py` | bài kiểm. 77 mục offline, 5 mục `--online`, 1 mục `--hardware` |
+| `reverse-check.py` | **kiểm chính bài kiểm**: gieo 67 khiếm khuyết đã biết vào một BẢN SAO của mã, đòi bài kiểm phải đỏ đúng chỗ |
 
 ```bash
-# từ thư mục gốc repo
-uv run python _dong-goi/package/eval/eval-googlecast-mcp.py             # 47 mục, không tác dụng phụ
-uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --online    # + 3 mục, cần internet
-uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --hardware  # + 2 mục, PHÁT TIẾNG THẬT
-uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --list      # xem danh sách mục
-
-uv run python _dong-goi/package/eval/reverse-check.py                   # 49 case, ~6 phút
-uv run python _dong-goi/package/eval/reverse-check.py --only tts        # lọc theo id
+uv run python eval-googlecast-mcp.py            # offline: không mạng, không thiết bị
+uv run python eval-googlecast-mcp.py --online   # + edge-tts thật
+uv run python eval-googlecast-mcp.py --json     # cho máy đọc
+uv run python reverse-check.py                  # ~12 phút
 ```
 
-> **`--hardware` phát tiếng ra loa thật trong nhà.** Xin phép người dùng trước
-> mỗi lần chạy. Đừng đưa nó vào CI, đừng chạy lúc nửa đêm.
+---
 
-## Ba tầng, mặc định là tầng vô hại
+## Ba tầng tác dụng phụ
 
-| Tầng | Số mục | Chạm vào |
+| Tầng | Cờ | Chạm tới | Xin phép? |
+|---|---|---|---|
+| offline | (mặc định) | không gì cả — mạng, thiết bị, dịch vụ TTS đều bị thay thế | không |
+| online | `--online` | edge-tts thật (cần internet). **Không phát ra loa nào** | không |
+| hardware | `--hardware` | **loa thật, phát ra tiếng trong nhà** | **có, mỗi lần** |
+
+Tầng `--hardware` cần `GOOGLECAST_MCP_TEST_SPEAKER=<tên loa>`.
+
+**Kết quả phiên này: 78/78 mục đăng ký, ĐẠT ngay lần chạy đầu.** Đáng ghi lại,
+vì đây là lần đầu tiên trong sáu phiên đóng gói mà tầng hardware không lộ lỗi
+nào của chính bài kiểm. Năm lần trước lần lượt vấp: rò mock TTS, rò mock
+`list_speakers`/`discover`, sập giữa chừng vì `KeyError`, đọc trạng thái ngay
+lúc `play_media` trả về, và tráo `_manager` mà quên `_media_server`. Các luật
+tích luỹ từ đúng những lần vấp đó — bằng-chứng-bền theo thời gian *và* phạm vi,
+tráo-bối-cảnh-trọn-bộ, đếm-đủ-trước-khi-đếm-xanh — là thứ đã chặn chúng lần này.
+
+Chia theo **tác dụng phụ**, không theo tốc độ. Tầng mặc định phải chạy được ở
+bất cứ đâu, bất cứ lúc nào, không làm phiền ai — vì **bài kiểm không ai dám
+chạy thì bằng như không có**.
+
+## Bốn luật, thi hành trong mã
+
+### 1. Đếm đủ trước khi đếm xanh
+
+Mỗi mục được bọc riêng: `AssertionError` → FAIL, mọi lỗi khác → **ERROR**
+(không nuốt thành PASS). Báo cáo in `đã chạy X/Y mục đăng ký`, và **X<Y là
+hỏng toàn cục** kể cả khi mọi mục đã chạy đều xanh.
+
+Luật này áp cho **mọi công cụ trong thư mục này**, kể cả `reverse-check.py`:
+nó in `đã chạy X/Y trường hợp đăng ký`, và khớp 0 trường hợp **không** được
+báo ĐẠT.
+
+### 2. Mọi mục phải gọi vào mã sản phẩm
+
+Và phải nằm trong ≥1 danh sách kỳ-vọng-đỏ. `reverse-check.py` tự kiểm điều
+này và nêu tên mục không được phủ: *mục mà không lỗi gieo nào làm đỏ được rất
+có thể không hề chạm vào sản phẩm.*
+
+Hiện tại: **77/77 mục offline** đều nằm trong ít nhất một danh sách kỳ-vọng-đỏ.
+
+### 3. So TẬP kỳ vọng, không so KÍCH THƯỚC
+
+`server.tools.exact_set` so tập tên tool tường minh. Kiểm "có 13 tool" thì vẫn
+xanh khi một tool bị đổi tên — đó là **test giả**.
+
+### 4. Bằng chứng bền theo thời gian VÀ phạm vi
+
+Khẳng định phải sống trong **vòng đời của thứ nó tham chiếu**. Đếm file sau
+khi thư mục tạm đã dọn là đếm vào chỗ trống → **đỏ bừa**, không phải lỗi sản
+phẩm. Với tầng hardware: không đòi `player_state == PLAYING` (đo được `say()`
+mất 5.4s trong khi clip chỉ 2.26s — trạng thái đã hết hạn), mà đòi dấu vết
+bền: `content_id` khớp URL vừa cast **và** `duration > 0`, trong một vòng chờ
+có timeout. Media server phải còn sống cho tới khi loa tải xong.
+
+## Kiểm ngược hoạt động thế nào
+
+Với **mỗi** lỗi gieo:
+
+1. Sao `src/` sang một thư mục tạm riêng (bỏ `__pycache__`).
+2. Sửa **bản sao**, đặt `GOOGLECAST_MCP_SRC` và `PYTHONPATH` trỏ vào đó,
+   `PYTHONDONTWRITEBYTECODE=1`.
+3. Chạy eval, so tập mục đỏ với `expect_red` **đã ghi trước**.
+
+Cây sản phẩm thật **không bao giờ bị ghi vào**. Hoàn nguyên là hệ quả của
+**cấu trúc**, không phải của việc nhớ dọn dẹp.
+
+Xác nhận cuối **không phải** nhìn `git status`, mà là **chạy lại eval trên cây
+nguyên vẹn và thấy xanh** (sau khi xoá bytecode).
+
+**Đối chứng vô hại** (`expect_red` rỗng) kỳ vọng vẫn XANH: nếu một thay đổi
+không đổi hành vi mà bài kiểm vẫn đỏ thì bài kiểm **đỏ bừa** — cũng là hỏng.
+
+## Khi một mục "lẽ ra đỏ mà lại xanh": BA nhánh, chọn một
+
+| Nhánh | Nghĩa | Xử lý |
 |---|---|---|
-| `offline` | 47 | chỉ thư mục tạm |
-| `--online` | 3 | dịch vụ edge-tts trên internet |
-| `--hardware` | 2 | thiết bị Cast thật, âm thanh thật |
+| **Test giả** | bài kiểm không bắt được gì thật | sửa bài kiểm cho bắt thật |
+| **Kỳ vọng sai** | có cắn, nhưng đòi sai điều | sửa `expect_red` **theo requirement, có trích nguồn**. Cấm nới cho xanh |
+| **Lỗi gieo không quan sát được** | bị một cơ chế khác che | **đổi lỗi gieo**, hoặc ghi CHƯA PHỦ kèm tên cơ chế che |
 
-Bài kiểm mà không ai dám chạy thì bằng như không có. Nên tầng mặc định phải chạy
-được ở bất cứ đâu, kể cả CI không mạng.
+Thiếu nhánh thứ ba là ép người ta làm bài kiểm *tệ đi* cho vừa luật.
 
-## Kết quả lần chạy này (2026-08-26)
+### Sáu lần định đoạt thật, đã ghi
 
-```
-offline    : da chay 47/47 muc dang ky -- dat 47, hong 0, loi 0   -> XANH
---online   : da chay 50/50 muc dang ky -- dat 50, hong 0, loi 0   -> XANH
-             (fan-out 6 thông báo hoàn tất trong 4.9s)
---hardware : ĐÃ CHẠY sau khi xin phép -- **49/49 mục đăng ký, XANH**
+Lượt kiểm ngược đầu tiên nêu **6 vấn đề**. Không cái nào được xử lý bằng cách
+hạ tiêu chuẩn:
 
-Lần chạy đầu LỖI (không phải hỏng): `url_for()` ném `ValueError` vì mục kiểm
-tráo `server._manager` nhưng **không tráo `server._media_server`**. Mỗi mục
-chạy trên thư mục cache riêng, trong khi media server mức module vẫn trỏ vào
-thư mục có từ lúc import — nên nó nhận một file nằm ngoài thư mục nó phục vụ.
+| # | Trường hợp | Nhánh | Xử lý |
+|---|---|---|---|
+| 1 | `media/khong-tu-khoi-dong` không làm đỏ `media.url_for.shape` | **TEST GIẢ** | Bài kiểm so URL với `server.port` của chính nó. Server chưa chạy thì cả hai cùng bằng 0, phép so vẫn xanh. **Siết** bài kiểm: thêm `server.port != 0` |
+| 2 | `store/nhan-ca-thiet-bi-hinh-anh` không làm đỏ `server.say.all_excludes_speaker_groups` | kỳ vọng sai | `all` lọc nhóm bằng `s["cast_type"] != "group"` trong `server.py`, **không đi qua** `is_speaker()`. Bỏ khỏi `expect_red`, ghi lý do tại chỗ |
+| 3 | `store/danh-roi-truong-du-lieu` không làm đỏ 3 mục | kỳ vọng sai | 3 mục đó đọc từ **cache sống** của `CastManager` (`list_cached()` gộp `live` đè lên `store.load()`), không qua vòng lưu-rồi-đọc |
+| 4 | `tts/render-rong-van-tinh-la-thanh-cong` không làm đỏ `...no_zero_byte_file_left_after_failure` | kỳ vọng sai | mục đó chạy kịch bản `save()` **ném lỗi**, dừng ở nhánh `except`, không chạm dòng bị gieo |
+| 5 | `cast/khop-bua-moi-ten` không làm đỏ `cast.resolve.saved_address_tried_before_rescan` | kỳ vọng sai | mục đó **dọn sạch cache sống** trước khi gọi, nên thân vòng lặp bị gieo lỗi không hề chạy |
+| 6 | Đối chứng `doi-chung/doi-ten-bien-cuc-bo` không gieo được | (lỗi gieo lạc hậu) | thụt lề trong bảng lỗi gieo không khớp mã thật. Kịch bản **bắt được và báo lỗi** thay vì âm thầm bỏ qua — đúng như thiết kế |
 
-Sửa: tầng hardware **dựng MediaServer riêng** trỏ đúng cache đang dùng, và giữ
-nó sống tới hết mục kiểm (loa còn phải tải file từ đó — dừng sớm là cắt giữa
-chừng).
+Trường hợp #1 là trường hợp đáng giá nhất: đó là một bài kiểm **giả** đã sống
+sót qua nhiều lượt xanh, và chỉ lộ ra khi bị đòi phải đỏ.
 
-Bài học, nối tiếp luật "vệ sinh mock" của v1.7: **cô lập phải trọn bộ.** Tráo
-một nửa bối cảnh còn nguy hiểm hơn không tráo, vì phần chưa tráo vẫn trỏ vào
-thế giới cũ và lỗi hiện ra ở chỗ chẳng liên quan gì.
+Còn **một lần định đoạt theo nhánh thứ ba** nằm sẵn trong bảng lỗi gieo: lỗi
+"file 0 byte bị coi là cache hợp lệ" nếu chỉ gieo vào lần kiểm thứ nhất thì bị
+**lần double-check bên trong khoá che mất** → đã **đổi lỗi gieo** thành gieo
+vào cả hai chỗ. Xem chú thích tại `tts/file-0-byte-bi-coi-la-cache-hop-le`.
 
-reverse-check: case dat 49/49 (45 lỗi gieo + 4 đối chứng)
-               do phu nguoc (lop offline): 47/47 muc
-               cay nguyen ven XANH (47/47)      -> DAT
-```
+## Các dạng test giả phải canh
 
-## Kiểm ngược làm gì, và làm thế nào
+- **So kích thước thay vì so tập kỳ vọng tường minh.**
+- **Sập giữa chừng mà vẫn báo đạt** → luật đếm đủ ở trên.
+- **Kiểm mà không chạm vào sản phẩm** → luật phủ ngược ở trên.
+- **So một giá trị với chính nó** → trường hợp #1.
+- **Gán đè lên chính hàm mà bản thay thế sẽ gọi lại.** Rút ngắn thời gian chờ
+  bằng `module.sleep = lambda: sleep(...)` là vòng lặp vô hạn: `module.asyncio`
+  và `asyncio` của bài kiểm là **cùng một đối tượng**. Bọc bằng proxy
+  (`_FastSleepAsyncio`), đừng gán đè.
+- **So mấy byte đầu với một danh sách tiền tố có độ dài khác nhau.** `data[:3]`
+  không bao giờ bằng một tiền tố 2 byte — bài kiểm đỏ trong khi sản phẩm không
+  sao. Dùng `is_mp3()` kiểm từ đồng bộ MPEG cho đúng.
 
-Với **mỗi** case, `reverse-check.py`:
+## Vệ sinh bối cảnh
 
-1. sao chép `src/`, `scripts/`, `pyproject.toml` sang một thư mục tạm **mới**;
-2. gieo đúng một thay đổi vào bản sao đó — nếu chuỗi cần tìm không xuất hiện đúng
-   số lần đã khai báo thì **báo lỗi**, vì case đã cũ so với product;
-3. chạy lại lớp offline với `PYTHONPATH` trỏ vào bản sao và
-   `PYTHONDONTWRITEBYTECODE=1`;
-4. đối chiếu tập mục đỏ thật với **danh sách kỳ vọng viết trước**.
+`swapped_server()` tráo **trọn bộ**: `_manager`, `_media_server`, **và** biến
+môi trường thư mục cache. Tráo nửa vời nguy hơn không tráo — thay `_manager`
+mà quên `_media_server` thì `url_for()` nhận file nằm ngoài thư mục nó phục vụ
+và ném `ValueError` ở một chỗ chẳng liên quan gì tới điều đang kiểm.
 
-**Cây sản phẩm không bao giờ bị ghi vào.** Hoàn nguyên không phải là chuyện nhớ
-hay quên — nó là hệ quả của cấu trúc. Và bước cuối cùng vẫn **chạy lại bộ kiểm
-trên cây nguyên vẹn và đòi XANH**: đó, chứ không phải `git status`, mới là bằng
-chứng không rò rỉ gì. (Lỗi gieo dài đúng bằng bản gốc có thể để lại `.pyc` cũ —
-git sạch mà eval vẫn đỏ.)
+Lỗi gieo `tts/bo-qua-bien-moi-truong-cache` cố tình tái hiện đúng cái bẫy đó.
 
-### Hai chiều, vì một chiều là không đủ
-
-- **45 lỗi gieo** — mỗi cái mang danh sách mục *phải* đỏ, viết **trước** khi chạy.
-  Mục nằm trong danh sách mà vẫn xanh = **TEST GIẢ**: nó chưa từng chạm vào hành
-  vi mà nó tự nhận là canh gác.
-- **4 đối chứng vô hại** — thêm một dòng chú thích, đổi lời một docstring, thêm
-  dòng trống, thêm một dấu cách trong script. Cả bốn **phải để bộ kiểm XANH**.
-  Đối chứng làm đỏ nghĩa là bộ kiểm bắn vào tiếng ồn — hỏng ngang việc không bao
-  giờ bắn.
-
-### Kiểm ngược đã bắt được gì trong chính phiên này
-
-Không phải lý thuyết. Lần chạy đầu tiên trả về `CHUA DAT` với 4 vấn đề thật:
-
-| Vấn đề | Sự thật | Xử lý |
-|---|---|---|
-| `media.stop_is_idempotent` xanh dù bỏ `server_close()` | `HTTPServer` đặt `SO_REUSEADDR`, và bỏ tham chiếu thì refcount tự đóng socket — lỗi gieo **không quan sát được** | đổi lỗi gieo sang bỏ nhánh `if self._httpd is None: return` — đúng cái mục này thật sự canh |
-| `tts.cache_hit_skips_service` xanh dù tắt lần kiểm cache đầu | lần kiểm **thứ hai** sau khoá vẫn bắt được → tắt riêng lần đầu chỉ là hồi quy hiệu năng | lỗi gieo giờ tắt **cả hai** lần kiểm; giới hạn ghi vào mục "chưa phủ" bên dưới |
-| `server.no_speakers_found` xanh dù `say` mặc định phát tất cả | **KỲ VỌNG SAI**, không phải test giả: nhánh mạng-rỗng trả `no_speakers_found` ở `server.py:84-89`, **trước** đoạn bị gieo lỗi | sửa **kỳ vọng** theo nguồn, ghi rõ dòng mã; không nới bài kiểm cho xanh |
-| `tts.keeps-zero-byte-file` báo case cũ | `path.unlink(missing_ok=True)` có **2** chỗ, khai báo 3 | sửa số; và bỏ `tts.retries_then_succeeds` khỏi kỳ vọng vì lần thử thứ ba ghi đè file rỗng nên mục đó **không thể** thấy |
-
-Ba trong bốn là bộ kiểm tự tố cáo mình. Đó chính là công dụng.
-
-### Một lần đỏ bừa nữa, ở lớp `--online`
-
-Mục `online.fanout_all_survive` báo **0/6 render thành công** — trong khi chạy tay
-đúng đoạn đó thì 6/6, mất 15.6 giây. Nguyên nhân nằm ở **bài kiểm**, không ở
-product: các phép khẳng định bị đặt **sau** khi khối `with tmpdir()` kết thúc, nên
-thư mục đã bị xoá trước lúc đếm file. Chuyển vào trong khối là xanh.
-
-Bài học: bằng chứng là **file trên đĩa**, nên phép khẳng định phải sống trong
-cùng vòng đời với cái đĩa đó.
-
-## Chưa phủ — nói thẳng, không giấu
-
-| Chỗ | Vì sao |
-|---|---|
-| Lớp `--online` (3 mục) | cần dịch vụ thật; kiểm ngược chỉ chạy lớp offline |
-| Lớp `--hardware` (2 mục) | cần loa thật và sự cho phép của người dùng |
-| Tắt **riêng** lần kiểm cache thứ nhất (`tts.py:71`) | lần kiểm thứ hai sau khoá vẫn trả đúng → là hồi quy **hiệu năng**, bộ kiểm không thấy |
-| Bỏ `server_close()` trong `MediaServer.stop()` | `SO_REUSEADDR` + refcount che mất |
-| `service.sh install` chạy thật | cần `sudo` và sẽ cắt dịch vụ của hai máy khác |
-| Sống sót qua reboot máy | đã `enable`, chưa reboot lần nào |
-
-Ba dòng cuối là **CHƯA THỬ**, không phải "đã thử và ổn".
-
-## Bằng chứng bền cho việc bất đồng bộ
-
-Lớp `--hardware` là chỗ dễ đỏ oan nhất. Trong các phiên trước nó đỏ oan **hai lần**:
-
-1. Hỏi trạng thái qua **một `CastManager` khác** cái đã cast. Trạng thái media là
-   **theo từng kết nối** — kết nối không phát sẽ báo `UNKNOWN` mãi mãi.
-2. Kể cả hỏi đúng manager vẫn đỏ: phần tử hỏng kéo `say()` dài **5.4 giây** trong
-   khi clip chỉ **2.26 giây**. Lúc `say()` trả về thì loa **đã phát xong** —
-   `IDLE`, `duration=2.256`. Bắt `PLAYING` là bắt một trạng thái đã bay mất.
-
-Cách đúng, đang dùng: hỏi qua **đúng manager đã cast**, và chờ tới khi
-`content_id` khớp URL vừa cast **và** `duration > 0`. Đó là dấu vết **còn lại sau
-khi phát xong**, chứ không phải trạng thái thoáng qua. Quy tắc chung: chỉ dùng
-trạng thái thoáng qua khi **tuổi thọ bằng chứng > trễ quan sát tối đa** — ở đây
-thì ngược lại, nên phải đổi bằng chứng.
-
-## Vệ sinh mock
-
-Mọi phép thay thế đi qua `swap()` / `swap_item()` và luôn khôi phục. Ngoài ra có
-**residue guard**: sau **mỗi** mục, bộ chạy so lại danh tính của một danh sách
-đối tượng canh gác; mục nào làm rò thì **chính nó** bị tính `ERROR` — không phải
-một mục vô tội ba lớp sau.
-
-Có lý do cụ thể cho việc này. Hai lần rò thật đã gặp:
-
-- tầng offline thay `tts.synthesize` ngay trên module → tầng `--online` đo nhầm
-  hàm giả và báo "mp3 0 byte";
-- một phép thử "mạng rỗng" thay `list_speakers`/`discover` lên `server._manager`
-  rồi không khôi phục → tầng `--hardware` FAIL với `no speaker answered mDNS`
-  trong khi loa vẫn sống nhăn.
-
-Nguyên tắc rút ra: **ưu tiên cô lập hơn canh gác**. Bộ kiểm hiện tại thay ở tầng
-thấp nhất có thể (`edge_tts.Communicate` thay vì `tts.synthesize`) để mã sản phẩm
-vẫn chạy thật hết mức.
-
-## Một chi tiết về vòng lặp sự kiện
-
-Bộ chạy dùng **một** vòng lặp asyncio cho cả lượt, đúng như server thật. Không
-phải chuyện thẩm mỹ: `tts._synthesis_lock` là `asyncio.Lock` mức module, nó **gắn
-vào vòng lặp đầu tiên tranh chấp nó**. Dùng `asyncio.run()` cho từng mục thì từ
-mục thứ hai trở đi sẽ nhận `RuntimeError: ... bound to a different event loop`.
-
-Đây là **điểm yếu thật của product**, phát hiện nhờ viết bộ kiểm. Nó đã được ghi
-vào bảng khiếm khuyết CÒN MỞ trong `../technical-docs.md`. Bộ kiểm né nó bằng cách
-mô phỏng đúng điều kiện production — **không** vá lén mã sản phẩm.
+Mọi thứ thay thế đều khôi phục trong `finally`. Không dùng `importlib.reload`.
+Ưu tiên cô lập hơn canh gác.
