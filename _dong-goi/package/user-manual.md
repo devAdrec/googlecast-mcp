@@ -1,97 +1,76 @@
-# Sổ tay dùng googlecast-mcp
-
-Dành cho người đã cài xong (`README.md`) và giờ muốn dùng.
-
-Cách dùng thường ngày là **nói với AI bằng tiếng Việt**, AI chọn tool. Bảng
-tool dưới đây để tra khi cần biết chính xác nó làm gì.
-
+---
+product: googlecast-mcp
+layer: output
+product_repo: https://github.com/devAdrec/googlecast-mcp
+package: https://github.com/devAdrec/googlecast-mcp
+registry: "[[packages/googlecast-mcp]]"
 ---
 
-## Việc hay làm nhất: cho loa nói một câu
+# Hướng dẫn dùng
 
-> "Nói 'Cơm đã chín rồi' ở loa bếp"
+Cài xong rồi thì bạn không gọi tool bằng tay. Bạn **nói với trợ lý bằng tiếng
+Việt**, nó tự chọn tool.
 
-AI gọi `say(text="Cơm đã chín rồi", target="Kitchen speaker")`.
+## Nói một câu ra loa
 
-**Không nói rõ loa nào thì sẽ bị hỏi lại, và không có tiếng nào phát ra.** Đó
-là cố ý, không phải trục trặc: âm thanh đã ra khỏi loa thì không thu lại được,
-nên mặc định là *không phát gì* chứ không phải *phát tất cả*.
+> *"Nói 'Cơm đã chín rồi' ở loa bếp"*
 
-> "Nói 'Tới giờ đi học rồi' ở tất cả loa"
+Trợ lý gọi `say(text="Cơm đã chín rồi", target="Kitchen speaker")`. Vài giây
+sau loa nói câu đó bằng giọng nữ tiếng Việt.
 
-Nhận cả `all` lẫn `tất cả`. `all` **cố tình bỏ qua nhóm loa** — nhóm phát qua
-chính các thành viên của nó, gộp cả hai thì một loa vật lý nhận hai luồng
-chồng nhau. Muốn phát vào một nhóm thì gọi thẳng tên nhóm.
+**Không nói rõ loa nào thì sẽ KHÔNG có gì kêu.** Trợ lý sẽ hỏi lại, kèm danh
+sách loa. Đây là cố ý: phát nhầm ra cả nhà là việc không hoàn tác được.
 
-Nhiều loa cụ thể: ngăn cách bằng dấu phẩy — `target="Kitchen speaker, Bedroom speaker"`.
+> *"Nói 'Sắp tới giờ họp' ở tất cả loa"* → phát ra mọi loa riêng lẻ.
+> *"…ở loa bếp và loa ngủ"* → hai loa.
 
-## 13 tool
+## Đổi giọng và tốc độ
 
-### Nói và tìm loa
+| Muốn | Nói |
+|---|---|
+| giọng nam | *"…đọc bằng giọng nam"* (`voice="male"`) |
+| chậm lại | *"…đọc chậm lại"* (`rate="-20%"`) |
+| nhanh lên | *"…đọc nhanh hơn"* (`rate="+10%"`) |
 
-| Tool | Làm gì | Tham số đáng chú ý |
+## Các việc khác
+
+| Muốn | Nói đại ý |
+|---|---|
+| xem có loa nào | *"liệt kê loa"* |
+| quét lại mạng | *"dò lại thiết bị Cast"* |
+| xem loa đang phát gì | *"loa bếp đang phát gì"* |
+| phát một file/stream | *"phát <URL> ở loa bếp"* |
+| tạm dừng / tiếp / dừng hẳn | *"tạm dừng loa bếp"* … |
+| nhảy tới phút 1 | *"tua tới giây 60 ở loa bếp"* |
+| chỉnh âm lượng | *"đặt âm lượng loa bếp 30%"* |
+| tắt/bật tiếng | *"tắt tiếng loa bếp"* |
+| trả loa về màn hình chờ | *"thoát ứng dụng trên loa bếp"* |
+
+Tên loa lấy đúng tên bạn đặt trong app Google Home, không phân biệt hoa thường.
+
+## Nhóm loa
+
+Nhóm loa (vd *Family speaker group*) gọi được **theo tên**. Nhưng `"tất cả"`
+thì **cố ý bỏ nhóm ra** — nhóm phát qua chính các loa thành viên, gộp cả hai
+thì một loa nhận hai luồng chồng nhau. Muốn dùng nhóm thì gọi thẳng tên nhóm.
+
+## Khi thấy lạ
+
+| Thấy | Nghĩa là | Làm gì |
 |---|---|---|
-| `say` | text → giọng nói → phát lên loa | `text`; `target` (tên loa / nhiều tên cách phẩy / `all` / `tất cả`); `voice` = `female` (mặc định) hoặc `male`; `rate` vd `-20%`, `+10%` |
-| `discover_devices` | quét mạng tìm thiết bị Cast | `timeout` giây, mặc định 5 |
-| `list_speakers` | liệt kê **loa** đã biết (bỏ thiết bị hình ảnh) | tự quét một lần nếu chưa biết gì |
-| `list_devices` | liệt kê **mọi** thiết bị đã biết, kể cả TV/Nest Hub | — |
+| trợ lý hỏi "phát ở loa nào" | bạn chưa chọn loa | trả lời tên loa, hoặc "tất cả" |
+| "No Google speaker found" | chưa quét được loa nào | bảo trợ lý *"dò lại thiết bị"*; kiểm máy chạy server có cùng Wi-Fi/LAN với loa không |
+| một loa báo lỗi, các loa khác vẫn nói | loa đó không trả lời | thường là thiết bị treo — rút điện cắm lại |
+| `wait timed out` | thiết bị Cast treo | khởi động lại thiết bị đó |
+| màn hình Nest Hub nháy sáng rồi tắt, không có tiếng | thiết bị treo, không phải lỗi phần mềm | khởi động lại thiết bị |
+| lệnh chạy nhưng im lặng | loa đang bị tắt tiếng hoặc âm lượng 0 | *"đặt âm lượng loa bếp 40%"* rồi thử lại |
 
-`list_speakers` đọc từ danh sách đã lưu nên trả lời ngay. `discover_devices`
-mới thật sự quét mạng — dùng khi vừa thêm loa mới.
+## Cần biết trước
 
-### Điều khiển phát
-
-| Tool | Làm gì |
-|---|---|
-| `play_media` | cast một URL media bất kỳ (loa **tự đi tải** URL đó) |
-| `play` / `pause` / `stop` | tiếp tục / tạm dừng / dừng hẳn |
-| `seek` | nhảy tới giây thứ N |
-| `get_status` | app đang chạy, trạng thái media, âm lượng |
-| `set_volume` | đặt mức tuyệt đối 0.0–1.0 (ngoài khoảng thì bị kẹp lại) |
-| `set_muted` | tắt / bật tiếng |
-| `quit_app` | đóng app, trả thiết bị về màn hình chờ |
-
-`play_media` cần URL mà **loa** với tới được, không phải máy bạn. URL
-`localhost` là vô nghĩa với loa.
-
-## Giọng nói
-
-| Chọn | Giọng |
-|---|---|
-| `female` (mặc định) | `vi-VN-HoaiMyNeural` |
-| `male` | `vi-VN-NamMinhNeural` |
-| tên đầy đủ bất kỳ | truyền thẳng cho edge-tts, vd `en-US-AriaNeural` |
-
-`rate` chỉnh tốc độ: `rate="-20%"` chậm lại, `rate="+10%"` nhanh lên.
-
-Mỗi tổ hợp (nội dung, giọng, tốc độ) được cache trên đĩa, nên câu lặp lại phát
-ngay không phải render lại.
-
-*Giọng nam và tham số `rate` chưa được nghe kiểm bằng tai — chúng chạy, nhưng
-chưa ai xác nhận nghe có ổn không.*
-
-## Khi có chuyện
-
-| Thấy gì | Làm gì |
-|---|---|
-| AI hỏi "phát ở loa nào?" | đúng như thiết kế — trả lời tên loa, hoặc `tất cả` |
-| Báo `no_speakers_found` | chạy `discover_devices`. Vẫn không thấy: máy chủ có cùng LAN với loa không? |
-| Một loa báo `error`, loa khác vẫn phát | phần tử hỏng được cô lập có chủ đích. Xem `error` của riêng loa đó |
-| `wait timed out` với một thiết bị | thiết bị treo. Kiểm `nc -z <ip> 8009`. Khởi động lại thiết bị |
-| Màn hình loa nháy sáng rồi tắt, **không có tiếng** | loa không tải được file: cổng audio (8766) chưa mở cho LAN |
-| Đổi tên loa trong app Google Home rồi gọi không được | chạy lại `discover_devices` |
-| Loa đổi IP | nhánh xử lý này **chưa từng được thử**. Chạy `discover_devices` là cách chắc nhất |
-
-## Nên biết
-
-- **Thông báo cắt ngang nhạc đang phát và không trả lại.** Chưa có chức năng
-  khôi phục âm lượng/media cũ.
-- **Hai `say` liên tiếp vào một loa**: cái sau cắt cái trước, không xếp hàng.
-- **Cache audio không tự dọn.** Thư mục
-  `${GOOGLECAST_MCP_CACHE:-/tmp/googlecast-mcp-tts}` chỉ tăng — xoá tay khi cần.
-- **Không có xác thực.** Ai tới được cổng đều gọi được tool, kể cả `say`. Nếu
-  server đang phơi ra internet, xem mục "Khiếm khuyết còn mở" trong
-  `technical-docs.md` trước khi để nguyên như vậy.
-- **`say` trả về trước khi loa phát xong** — với clip ngắn, có khi loa đã phát
-  xong trước cả lúc lệnh trả về. Trạng thái `get_status` ngay sau đó có thể
-  đã là "xong rồi", không phải "đang phát".
+- **Máy chạy server phải cùng LAN với loa.** Loa tự đi tải file âm thanh ngược
+  về máy đó; qua VPN hay mạng khác là không nghe được gì.
+- **Cần internet.** Việc chuyển chữ thành tiếng nói dùng dịch vụ trực tuyến.
+- **Câu đã đọc được nhớ lại.** Nói lại y hệt một câu thì phát ngay, không phải
+  chờ tổng hợp lần nữa.
+- **Thông báo xong không tự trả lại nhạc đang nghe.** Đang nghe nhạc mà cho
+  loa nói thì phải tự bật nhạc lại.

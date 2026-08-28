@@ -1,85 +1,142 @@
 #!/usr/bin/env python3
 """Bài kiểm cho googlecast-mcp.
 
-Ba tầng tác dụng phụ:
-  (mặc định)   offline  — không mạng, không thiết bị. Mọi thứ chạm ngoài đều bị thay thế.
-  --online              — gọi edge-tts thật (cần internet). Không phát ra loa nào.
-  --hardware            — cast thật ra loa: PHÁT RA TIẾNG. Chỉ chạy khi đã xin phép.
+Ba tầng:
+  (mặc định)   offline  — không mạng, không phần cứng, không tác dụng phụ
+  --online              — gọi dịch vụ edge-tts thật (cần internet)
+  --hardware            — cast ra loa THẬT, phát tiếng thật (phải xin phép)
 
-Nguyên tắc của bài kiểm này:
-  1. ĐẾM ĐỦ TRƯỚC KHI ĐẾM XANH. Mỗi mục đăng ký trong CHECKS được chạy riêng,
-     bọc riêng. Báo cáo in "đã chạy X/Y mục đăng ký"; X < Y là FAIL toàn cục,
-     kể cả khi mọi mục đã chạy đều xanh. Sập giữa chừng không thể giả dạng ĐẠT.
-  2. MỌI MỤC PHẢI GỌI VÀO MÃ SẢN PHẨM. Không có mục nào chỉ kiểm chính nó.
-  3. Mỗi mục phải nằm trong ít nhất một danh sách kỳ-vọng-đỏ của reverse-check.py.
-     Mục mà không lỗi gieo nào làm đỏ được là nghi phạm cấu trúc.
-  4. So TẬP kỳ vọng tường minh, không so KÍCH THƯỚC.
+Luật của bài kiểm này (xem eval/README.md để biết vì sao):
+  * ĐẾM ĐỦ TRƯỚC KHI ĐẾM XANH: báo cáo in "đã chạy X/Y mục đăng ký".
+    X < Y là KHÔNG ĐẠT toàn cục, kể cả khi mọi mục đã chạy đều xanh.
+    Khớp 0 mục (vd --only sai tên) cũng KHÔNG ĐẠT.
+  * Mỗi mục phải GỌI vào mã sản phẩm. Lỗi hạ tầng của chính bài kiểm được
+    báo là ERROR chứ không nuốt thành PASS.
+  * Không mục nào ghi vào cây sản phẩm; mọi thứ nằm trong thư mục tạm.
 
-Chạy:
-    python eval-googlecast-mcp.py
-    python eval-googlecast-mcp.py --online
-    python eval-googlecast-mcp.py --json
+Dùng:
+    uv run python _dong-goi/package/eval/eval-googlecast-mcp.py
+    uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --only tts_lock_per_loop,tts_serializes
+    uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --online
+    uv run python _dong-goi/package/eval/eval-googlecast-mcp.py --hardware   # phát tiếng thật
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import inspect
+import contextlib
 import json
 import os
 import socket
 import sys
 import tempfile
-import threading
 import time
 import traceback
+import types
 import urllib.request
-from contextlib import contextmanager
 from pathlib import Path
-
-# Mã sản phẩm: bản sao do reverse-check.py chỉ định (qua PYTHONPATH /
-# GOOGLECAST_MCP_SRC), nếu không thì cây thật cạnh gói này.
-_DEFAULT_SRC = Path(__file__).resolve().parents[3] / "src"
-sys.path.insert(0, os.environ.get("GOOGLECAST_MCP_SRC", str(_DEFAULT_SRC)))
-
-from googlecast_mcp import cast_manager as cm  # noqa: E402
-from googlecast_mcp import media_server as ms  # noqa: E402
-from googlecast_mcp import server as srv  # noqa: E402
-from googlecast_mcp import speaker_store as st  # noqa: E402
-from googlecast_mcp import tts  # noqa: E402
-from googlecast_mcp import __main__ as entry  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Sổ đăng ký
 # --------------------------------------------------------------------------
 
-CHECKS: list[tuple[str, str, object]] = []  # (id, tầng, hàm)
+REGISTRY: "list[tuple[str, str, object]]" = []  # (id, tier, fn)
 
 
-def check(check_id: str, tier: str = "offline"):
-    def deco(fn):
-        CHECKS.append((check_id, tier, fn))
+def check(item_id: str, tier: str = "offline"):
+    def wrap(fn):
+        REGISTRY.append((item_id, tier, fn))
         return fn
 
-    return deco
+    return wrap
 
 
 # --------------------------------------------------------------------------
-# Dụng cụ dựng bối cảnh
+# Dụng cụ: tráo bối cảnh có khôi phục, KHÔNG bao giờ tự-gọi-đệ-quy
 # --------------------------------------------------------------------------
 
 
-def is_mp3(data: bytes) -> bool:
-    """Đúng khung mp3: hoặc thẻ ID3, hoặc từ đồng bộ MPEG (11 bit 1 đầu tiên).
+class ModuleProxy(types.SimpleNamespace):
+    """Bọc một module: các thuộc tính ghi đè nằm ở lớp ngoài, phần còn lại
+    ủy quyền cho module GỐC đã giữ tham chiếu.
 
-    Đừng so mấy byte đầu với một danh sách tiền tố cứng: edge-tts trả về nhiều
-    biến thể (fff3, fffb, ...) và so nhầm ĐỘ DÀI thì phép so không bao giờ
-    đúng — bài kiểm đỏ trong khi sản phẩm không sao.
+    Đây là cách tránh bẫy thay-thế-đệ-quy: KHÔNG được gán
+    ``mod.asyncio.sleep = fake`` vì ``mod.asyncio`` chính là module asyncio
+    toàn cục — bản thay thế sẽ gọi lại chính nó. Ở đây bản gốc được giữ riêng
+    nên lời gọi ủy quyền luôn đi tới hàm thật.
     """
-    if data[:3] == b"ID3":
-        return True
-    return len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0
+
+    def __init__(self, real, **overrides):
+        super().__init__(**overrides)
+        object.__setattr__(self, "_real", real)
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_real"), name)
+
+
+@contextlib.contextmanager
+def swap(obj, name, value):
+    """Đổi một thuộc tính rồi TRẢ LẠI nguyên trạng, kể cả khi có ngoại lệ."""
+    missing = object()
+    old = getattr(obj, name, missing)
+    setattr(obj, name, value)
+    try:
+        yield
+    finally:
+        if old is missing:
+            delattr(obj, name)
+        else:
+            setattr(obj, name, old)
+
+
+@contextlib.contextmanager
+def swap_env(name, value):
+    missing = object()
+    old = os.environ.get(name, missing)
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
+    try:
+        yield
+    finally:
+        if old is missing:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = old
+
+
+@contextlib.contextmanager
+def tmpdir():
+    with tempfile.TemporaryDirectory(prefix="gcmcp-eval-") as d:
+        yield Path(d)
+
+
+def stop_quietly(server, seconds=5.0):
+    """Tắt media server nhưng KHÔNG để nó treo cả bài kiểm.
+
+    ThreadingHTTPServer.shutdown() chờ vòng serve_forever thoát; nếu sản phẩm
+    (đã bị gieo lỗi) chưa từng khởi động vòng đó thì lời gọi này treo vĩnh
+    viễn. Một bài kiểm treo không phải là bài kiểm xanh — nó phải kết thúc
+    được rồi mới nói chuyện đỏ/xanh.
+    """
+    import threading
+
+    t = threading.Thread(target=server.stop, daemon=True)
+    t.start()
+    t.join(seconds)
+
+
+def want(condition, message):
+    """Khẳng định. Dùng hàm thay vì `assert` để `python -O` không xoá mất."""
+    if not condition:
+        raise AssertionError(message)
+
+
+# --------------------------------------------------------------------------
+# Bản giả cho thiết bị Cast
+# --------------------------------------------------------------------------
 
 
 class FakeCastInfo:
@@ -95,1224 +152,1285 @@ class FakeCastInfo:
 
 class FakeMediaController:
     def __init__(self):
-        self.status = type("S", (), {})()
-        self.status.player_state = "PLAYING"
-        self.status.title = None
-        self.status.content_id = None
-        self.status.content_type = None
-        self.status.duration = 2.0
-        self.status.current_time = 0.0
-        self.calls: list[tuple] = []
+        self.played = []
+        self.status = types.SimpleNamespace(
+            player_state="PLAYING",
+            title="t",
+            content_id=None,
+            content_type="audio/mpeg",
+            duration=2.0,
+            current_time=0.0,
+        )
 
     def play_media(self, url, content_type, title=None):
-        self.calls.append(("play_media", url, content_type, title))
+        self.played.append((url, content_type, title))
         self.status.content_id = url
-        self.status.content_type = content_type
-        self.status.title = title
 
     def block_until_active(self, timeout=10):
         pass
 
     def play(self):
-        self.calls.append(("play",))
+        self.status.player_state = "PLAYING"
 
     def pause(self):
-        self.calls.append(("pause",))
+        self.status.player_state = "PAUSED"
 
     def stop(self):
-        self.calls.append(("stop",))
+        self.status.player_state = "IDLE"
 
-    def seek(self, pos):
-        self.calls.append(("seek", pos))
+    def seek(self, position):
+        self.status.current_time = position
 
 
 class FakeCast:
     def __init__(self, name, uuid, cast_type="audio", host="192.168.1.22"):
         self.cast_info = FakeCastInfo(name, uuid, cast_type, host)
         self.media_controller = FakeMediaController()
-        self.status = type("A", (), {})()
-        self.status.display_name = "Default Media Receiver"
-        self.status.app_id = "CC1AD845"
-        self.status.is_active_input = None
-        self.status.volume_level = 0.5
-        self.status.volume_muted = False
-        self.calls: list[tuple] = []
-        self.waited = False
+        self.status = types.SimpleNamespace(
+            display_name="Default Media Receiver",
+            app_id="CC1AD845",
+            is_active_input=None,
+            volume_level=0.5,
+            volume_muted=False,
+        )
+        self.volume_calls = []
+        self.mute_calls = []
+        self.quit_calls = 0
+        self.waited = 0
 
     def wait(self, timeout=10):
-        self.waited = True
+        self.waited += 1
 
     def set_volume(self, level):
-        self.calls.append(("set_volume", level))
+        self.volume_calls.append(level)
 
     def set_volume_muted(self, muted):
-        self.calls.append(("set_volume_muted", muted))
+        self.mute_calls.append(muted)
 
     def quit_app(self):
-        self.calls.append(("quit_app",))
+        self.quit_calls += 1
 
     def disconnect(self, blocking=False):
-        self.calls.append(("disconnect",))
+        pass
 
 
-def make_manager(devices, store_path):
-    """CastManager đã nạp sẵn thiết bị giả, dùng store trong thư mục tạm."""
-    mgr = cm.CastManager(store=st.SpeakerStore(Path(store_path)))
-    for cast in devices:
-        mgr._devices[str(cast.cast_info.uuid)] = cast
-    mgr._store.save([cm.CastManager._info(c) for c in devices])
-    return mgr
+def fake_pychromecast(casts=(), from_host=None):
+    """Bản giả TRỌN BỘ của mặt tiếp xúc pychromecast mà cast_manager dùng."""
+    browser = types.SimpleNamespace(stop_discovery=lambda: None)
 
+    def get_chromecasts(timeout=5.0):
+        return list(casts), browser
 
-@contextmanager
-def swapped_server(devices, *, cache_dir=None):
-    """Tráo TRỌN BỘ bối cảnh của server: manager + media server + thư mục cache.
-
-    Tráo nửa vời nguy hơn không tráo: nếu chỉ thay _manager mà để nguyên
-    _media_server, url_for() nhận file nằm ngoài thư mục nó phục vụ và ném
-    ValueError ở một chỗ chẳng liên quan gì tới điều đang kiểm.
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        cache = Path(cache_dir) if cache_dir else tmp_path / "cache"
-        cache.mkdir(parents=True, exist_ok=True)
-        old_manager, old_media = srv._manager, srv._media_server
-        old_env = os.environ.get("GOOGLECAST_MCP_CACHE")
-        os.environ["GOOGLECAST_MCP_CACHE"] = str(cache)
-        srv._manager = make_manager(devices, tmp_path / "speakers.json")
-        srv._media_server = ms.MediaServer(cache, host="127.0.0.1", port=0)
-        try:
-            yield srv._manager, srv._media_server, cache
-        finally:
-            srv._media_server.stop()
-            srv._manager, srv._media_server = old_manager, old_media
-            if old_env is None:
-                os.environ.pop("GOOGLECAST_MCP_CACHE", None)
-            else:
-                os.environ["GOOGLECAST_MCP_CACHE"] = old_env
-
-
-class FakeCommunicate:
-    """Thay edge_tts.Communicate. Ghi lại lời gọi, viết ra file mp3 giả."""
-
-    calls: list[tuple] = []
-    behaviour = "ok"  # ok | fail | empty | fail_once
-    _attempts: dict[str, int] = {}
-
-    def __init__(self, text, voice, rate="+0%", volume="+0%"):
-        self.text, self.voice, self.rate, self.volume = text, voice, rate, volume
-        FakeCommunicate.calls.append((text, voice, rate, volume))
-
-    async def save(self, path):
-        await asyncio.sleep(0.01)
-        mode = FakeCommunicate.behaviour
-        if mode == "fail_once":
-            n = FakeCommunicate._attempts.get(path, 0)
-            FakeCommunicate._attempts[path] = n + 1
-            if n == 0:
-                Path(path).write_bytes(b"")  # để lại file 0 byte rồi ném lỗi
-                raise ConnectionError("Cannot connect to host")
-        elif mode == "fail":
-            Path(path).write_bytes(b"")
-            raise ConnectionError("Cannot connect to host")
-        elif mode == "empty":
-            Path(path).write_bytes(b"")
-            return
-        Path(path).write_bytes(b"ID3fake-audio-bytes")
-
-
-class _FastSleepAsyncio:
-    """Proxy quanh module asyncio, chỉ rút ngắn giãn cách giữa các lần thử lại.
-
-    Gán thẳng asyncio.sleep = lambda: asyncio.sleep(0) là tự trỏ vào chính nó
-    (tts.asyncio VÀ asyncio của bài kiểm là CÙNG một đối tượng module) — vòng
-    lặp vô hạn hiện ra ở một chỗ chẳng liên quan. Proxy giữ nguyên module thật.
-    """
-
-    def __getattr__(self, name):
-        return getattr(asyncio, name)
-
-    async def sleep(self, _delay, *a, **k):
-        await asyncio.sleep(0)
-
-
-@contextmanager
-def fake_tts(behaviour="ok", fast_retry=False):
-    real = tts.edge_tts.Communicate
-    real_asyncio = tts.asyncio
-    FakeCommunicate.calls = []
-    FakeCommunicate._attempts = {}
-    FakeCommunicate.behaviour = behaviour
-    tts.edge_tts.Communicate = FakeCommunicate
-    if fast_retry:
-        tts.asyncio = _FastSleepAsyncio()
-    try:
-        yield FakeCommunicate
-    finally:
-        tts.edge_tts.Communicate = real
-        tts.asyncio = real_asyncio
-
-
-@contextmanager
-def fake_pychromecast(casts=None, from_host=None):
-    """Tráo TRỌN cửa ngõ pychromecast của cast_manager."""
-    real_get = cm.pychromecast.get_chromecasts
-    real_host = cm.pychromecast.get_chromecast_from_host
-    seen = {"discover": 0, "from_host": []}
-
-    def _get(timeout=5.0):
-        seen["discover"] += 1
-        return (list(casts or []), object())
-
-    def _from_host(info, tries=1, timeout=5):
-        seen["from_host"].append(info)
+    def get_chromecast_from_host(info, tries=1, timeout=5):
         if from_host is None:
-            raise OSError("no route")
-        return from_host
+            raise OSError("no route to host")
+        return from_host(info)
 
-    cm.pychromecast.get_chromecasts = _get
-    cm.pychromecast.get_chromecast_from_host = _from_host
-    try:
-        yield seen
-    finally:
-        cm.pychromecast.get_chromecasts = real_get
-        cm.pychromecast.get_chromecast_from_host = real_host
-
-
-def free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+    return types.SimpleNamespace(
+        get_chromecasts=get_chromecasts,
+        get_chromecast_from_host=get_chromecast_from_host,
+    )
 
 
 # ==========================================================================
-# speaker_store.py
+# speaker_store
 # ==========================================================================
 
 
-@check("store.is_speaker.audio")
+@check("store_is_speaker_audio")
 def _():
-    assert st.is_speaker({"cast_type": "audio"}) is True
+    from googlecast_mcp import speaker_store
+
+    want(speaker_store.is_speaker({"cast_type": "audio"}), "loa audio phải là speaker")
 
 
-@check("store.is_speaker.group")
+@check("store_is_speaker_group")
 def _():
-    assert st.is_speaker({"cast_type": "group"}) is True
+    from googlecast_mcp import speaker_store
+
+    want(speaker_store.is_speaker({"cast_type": "group"}), "nhóm loa phải là speaker")
 
 
-@check("store.is_speaker.video_excluded")
+@check("store_rejects_video_cast")
 def _():
-    assert st.is_speaker({"cast_type": "cast"}) is False
-    assert st.is_speaker({}) is False
+    from googlecast_mcp import speaker_store
+
+    want(
+        not speaker_store.is_speaker({"cast_type": "cast"}),
+        "thiết bị hình ảnh KHÔNG được tính là loa",
+    )
+    want(not speaker_store.is_speaker({}), "thiếu cast_type thì không phải loa")
 
 
-@check("store.default_path.env_override")
+@check("store_path_env_override")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        os.environ["GOOGLECAST_MCP_STORE"] = f"{tmp}/x.json"
-        try:
-            assert st.default_store_path() == Path(tmp) / "x.json"
-        finally:
-            os.environ.pop("GOOGLECAST_MCP_STORE")
-    os.environ.pop("GOOGLECAST_MCP_STORE", None)
-    assert st.default_store_path() == Path.home() / ".googlecast-mcp" / "speakers.json"
+    from googlecast_mcp import speaker_store
+
+    with tmpdir() as d:
+        with swap_env("GOOGLECAST_MCP_STORE", str(d / "s.json")):
+            want(
+                speaker_store.default_store_path() == d / "s.json",
+                "GOOGLECAST_MCP_STORE phải quyết định nơi lưu",
+            )
 
 
-@check("store.load.missing_file_is_empty")
+@check("store_path_default_home")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        assert st.SpeakerStore(Path(tmp) / "nope.json").load() == []
+    from googlecast_mcp import speaker_store
+
+    with swap_env("GOOGLECAST_MCP_STORE", None):
+        p = speaker_store.default_store_path()
+    want(
+        p == Path.home() / ".googlecast-mcp" / "speakers.json",
+        f"đường dẫn mặc định sai: {p}",
+    )
 
 
-@check("store.load.corrupt_file_is_empty")
+@check("store_load_missing_is_empty")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        p = Path(tmp) / "s.json"
-        p.write_text("{not json", encoding="utf-8")
-        assert st.SpeakerStore(p).load() == []
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    with tmpdir() as d:
+        want(SpeakerStore(d / "none.json").load() == [], "file chưa có phải trả []")
 
 
-@check("store.save.roundtrip")
+@check("store_load_corrupt_is_empty")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        store = st.SpeakerStore(Path(tmp) / "s.json")
-        store.save([{"uuid": "u1", "friendly_name": "Kitchen", "cast_type": "audio"}])
-        loaded = store.load()
-        assert [d["uuid"] for d in loaded] == ["u1"]
-        assert loaded[0]["friendly_name"] == "Kitchen"
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    with tmpdir() as d:
+        p = d / "s.json"
+        p.write_text("{ khong phai json", encoding="utf-8")
+        want(SpeakerStore(p).load() == [], "JSON hỏng phải trả [] chứ không ném lỗi")
 
 
-@check("store.save.merges_by_uuid")
+@check("store_save_merges_by_uuid")
 def _():
-    """Quét mDNS sót thiết bị không được xoá thiết bị đã biết."""
-    with tempfile.TemporaryDirectory() as tmp:
-        store = st.SpeakerStore(Path(tmp) / "s.json")
-        store.save([{"uuid": "u1", "friendly_name": "Kitchen", "cast_type": "audio"}])
-        store.save([{"uuid": "u2", "friendly_name": "Bed", "cast_type": "audio"}])
-        assert {d["uuid"] for d in store.load()} == {"u1", "u2"}
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    with tmpdir() as d:
+        s = SpeakerStore(d / "s.json")
+        s.save([{"uuid": "u1", "friendly_name": "A", "cast_type": "audio"}])
+        s.save([{"uuid": "u1", "host": "192.168.1.9"}])
+        s.save([{"uuid": "u2", "friendly_name": "B", "cast_type": "cast"}])
+        devices = {d_["uuid"]: d_ for d_ in s.load()}
+        want(len(devices) == 2, f"phải còn đúng 2 thiết bị, có {len(devices)}")
+        want(
+            devices["u1"]["friendly_name"] == "A" and devices["u1"]["host"] == "192.168.1.9",
+            "gộp theo uuid phải GIỮ trường cũ và thêm trường mới",
+        )
 
 
-@check("store.save.update_keeps_old_fields")
+@check("store_save_no_temp_left")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        store = st.SpeakerStore(Path(tmp) / "s.json")
-        store.save([{"uuid": "u1", "friendly_name": "Kitchen", "cast_type": "audio"}])
-        store.save([{"uuid": "u1", "host": "192.168.1.9"}])
-        d = store.load()[0]
-        assert d["friendly_name"] == "Kitchen" and d["host"] == "192.168.1.9"
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    with tmpdir() as d:
+        s = SpeakerStore(d / "s.json")
+        s.save([{"uuid": "u1", "friendly_name": "A", "cast_type": "audio"}])
+        leftovers = sorted(p.name for p in d.iterdir())
+        want(leftovers == ["s.json"], f"ghi-rồi-đổi-tên không được để rác: {leftovers}")
+        payload = json.loads((d / "s.json").read_text(encoding="utf-8"))
+        want("updated_at" in payload and "devices" in payload, "thiếu khoá trong file lưu")
 
 
-@check("store.save.no_tmp_left_behind")
+@check("store_speakers_filters_video")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        store = st.SpeakerStore(Path(tmp) / "s.json")
-        store.save([{"uuid": "u1", "cast_type": "audio"}])
-        assert {p.name for p in Path(tmp).iterdir()} == {"s.json"}
+    from googlecast_mcp.speaker_store import SpeakerStore
 
-
-@check("store.save.creates_parent_dir")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        store = st.SpeakerStore(Path(tmp) / "deep" / "er" / "s.json")
-        store.save([{"uuid": "u1", "cast_type": "audio"}])
-        assert store.path.exists()
-
-
-@check("store.speakers.filters_video")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        store = st.SpeakerStore(Path(tmp) / "s.json")
-        store.save(
+    with tmpdir() as d:
+        s = SpeakerStore(d / "s.json")
+        s.save(
             [
-                {"uuid": "a", "friendly_name": "Kitchen", "cast_type": "audio"},
-                {"uuid": "g", "friendly_name": "Family group", "cast_type": "group"},
-                {"uuid": "v", "friendly_name": "Living room TV", "cast_type": "cast"},
+                {"uuid": "u1", "friendly_name": "Kitchen speaker", "cast_type": "audio"},
+                {"uuid": "u2", "friendly_name": "Working display", "cast_type": "cast"},
+                {"uuid": "u3", "friendly_name": "Family speaker group", "cast_type": "group"},
             ]
         )
-        assert {d["friendly_name"] for d in store.speakers()} == {
-            "Kitchen",
-            "Family group",
-        }
+        names = sorted(x["friendly_name"] for x in s.speakers())
+        want(
+            names == ["Family speaker group", "Kitchen speaker"],
+            f"speakers() phải lọc thiết bị hình ảnh, được {names}",
+        )
 
 
 # ==========================================================================
-# tts.py
+# tts
 # ==========================================================================
 
 
-@check("tts.resolve_voice.female")
-def _():
-    assert tts.resolve_voice("female") == "vi-VN-HoaiMyNeural"
+def _fake_edge_tts(behaviour):
+    """Bản giả TRỌN BỘ mặt tiếp xúc edge_tts mà tts.py dùng (chỉ Communicate)."""
+    state = {"calls": 0, "live": 0, "max_live": 0}
 
+    class Communicate:
+        def __init__(self, text, voice, rate="+0%", volume="+0%"):
+            self.text, self.voice, self.rate = text, voice, rate
 
-@check("tts.resolve_voice.male")
-def _():
-    assert tts.resolve_voice("male") == "vi-VN-NamMinhNeural"
-
-
-@check("tts.resolve_voice.default_when_blank")
-def _():
-    assert tts.resolve_voice(None) == "vi-VN-HoaiMyNeural"
-    assert tts.resolve_voice("") == "vi-VN-HoaiMyNeural"
-
-
-@check("tts.resolve_voice.passthrough_full_id")
-def _():
-    assert tts.resolve_voice("en-US-AriaNeural") == "en-US-AriaNeural"
-
-
-@check("tts.synthesize.empty_text_rejected")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp:
-            for bad in ("", "   "):
-                try:
-                    await tts.synthesize(bad, cache_dir=Path(tmp))
-                except ValueError:
-                    continue
-                raise AssertionError(f"chữ rỗng {bad!r} lẽ ra phải bị từ chối")
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.writes_file")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts():
-            p = await tts.synthesize("xin chào", cache_dir=Path(tmp))
-            assert p.exists() and p.stat().st_size > 0
-            assert p.suffix == ".mp3"
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.cache_hit_skips_render")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts() as fc:
-            await tts.synthesize("xin chào", cache_dir=Path(tmp))
-            await tts.synthesize("xin chào", cache_dir=Path(tmp))
-            assert len(fc.calls) == 1, f"lẽ ra render 1 lần, thực tế {len(fc.calls)}"
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.cache_key_varies_by_voice")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts():
-            a = await tts.synthesize("xin chào", voice="female", cache_dir=Path(tmp))
-            b = await tts.synthesize("xin chào", voice="male", cache_dir=Path(tmp))
-            assert a != b
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.cache_key_varies_by_rate")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts():
-            a = await tts.synthesize("xin chào", rate="+0%", cache_dir=Path(tmp))
-            b = await tts.synthesize("xin chào", rate="-20%", cache_dir=Path(tmp))
-            assert a != b
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.cache_key_varies_by_text")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts():
-            a = await tts.synthesize("một", cache_dir=Path(tmp))
-            b = await tts.synthesize("hai", cache_dir=Path(tmp))
-            assert a != b
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.zero_byte_is_not_a_cache_hit")
-def _():
-    """File 0 byte của lần hỏng trước KHÔNG được coi là bản render hợp lệ."""
-
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts() as fc:
-            p = await tts.synthesize("xin chào", cache_dir=Path(tmp))
-            p.write_bytes(b"")
-            again = await tts.synthesize("xin chào", cache_dir=Path(tmp))
-            assert len(fc.calls) == 2, "file 0 byte bị nhầm là cache hợp lệ"
-            assert again.stat().st_size > 0
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.retries_then_succeeds")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts("fail_once", fast_retry=True) as fc:
-            p = await tts.synthesize("xin chào", cache_dir=Path(tmp))
-            assert len(fc.calls) == 2, f"lẽ ra thử lại lần 2, thực tế {len(fc.calls)}"
-            assert p.stat().st_size > 0
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.gives_up_after_three_attempts")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts("fail", fast_retry=True) as fc:
+        async def save(self, path):
+            state["calls"] += 1
+            state["live"] += 1
+            state["max_live"] = max(state["max_live"], state["live"])
             try:
-                await tts.synthesize("xin chào", cache_dir=Path(tmp))
-            except RuntimeError as exc:
-                assert "3 attempts" in str(exc)
-                assert len(fc.calls) == 3, f"lẽ ra thử 3 lần, thực tế {len(fc.calls)}"
-                return
-            raise AssertionError("hỏng cả 3 lần mà vẫn không báo lỗi")
+                await behaviour(self, path)
+            finally:
+                state["live"] -= 1
 
-    asyncio.run(run())
+    return types.SimpleNamespace(Communicate=Communicate), state
 
 
-@check("tts.synthesize.no_zero_byte_file_left_after_failure")
+async def _write_ok(comm, path):
+    await asyncio.sleep(0.03)
+    Path(path).write_bytes(b"ID3fake-audio-bytes")
+
+
+@check("tts_resolve_female")
 def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts("fail", fast_retry=True):
+    from googlecast_mcp import tts
+
+    want(tts.resolve_voice("female") == "vi-VN-HoaiMyNeural", "giọng nữ sai")
+
+
+@check("tts_resolve_male")
+def _():
+    from googlecast_mcp import tts
+
+    want(tts.resolve_voice("male") == "vi-VN-NamMinhNeural", "giọng nam sai")
+
+
+@check("tts_resolve_passthrough_and_default")
+def _():
+    from googlecast_mcp import tts
+
+    want(tts.resolve_voice("en-US-AriaNeural") == "en-US-AriaNeural", "id đầy đủ phải đi thẳng")
+    want(tts.resolve_voice(None) == tts.DEFAULT_VOICE, "None phải ra giọng mặc định")
+    want(tts.resolve_voice("") == tts.DEFAULT_VOICE, "rỗng phải ra giọng mặc định")
+    want(tts.DEFAULT_VOICE.startswith("vi-VN"), "mặc định phải là giọng tiếng Việt")
+
+
+@check("tts_empty_text_raises")
+def _():
+    from googlecast_mcp import tts
+
+    with tmpdir() as d:
+        try:
+            asyncio.run(tts.synthesize("   ", cache_dir=d))
+        except ValueError:
+            return
+        raise AssertionError("text rỗng phải ném ValueError")
+
+
+@check("tts_cache_hit_skips_render")
+def _():
+    from googlecast_mcp import tts
+
+    fake, state = _fake_edge_tts(_write_ok)
+    with tmpdir() as d, swap(tts, "edge_tts", fake):
+        p1 = asyncio.run(tts.synthesize("Cơm đã chín rồi", cache_dir=d))
+        want(state["calls"] == 1, "lần đầu phải render")
+        p2 = asyncio.run(tts.synthesize("Cơm đã chín rồi", cache_dir=d))
+        want(p1 == p2, "cùng nội dung phải ra cùng file")
+        want(state["calls"] == 1, f"lần hai phải dùng cache, đã render {state['calls']} lần")
+
+
+@check("tts_cache_key_varies_with_rate")
+def _():
+    from googlecast_mcp import tts
+
+    fake, state = _fake_edge_tts(_write_ok)
+    with tmpdir() as d, swap(tts, "edge_tts", fake):
+        a = asyncio.run(tts.synthesize("xin chào", rate="+0%", cache_dir=d))
+        b = asyncio.run(tts.synthesize("xin chào", rate="+10%", cache_dir=d))
+        want(a != b, "đổi rate phải ra file khác")
+        c = asyncio.run(tts.synthesize("xin chào", voice="male", cache_dir=d))
+        want(c != a, "đổi giọng phải ra file khác")
+
+
+@check("tts_zero_byte_not_reused")
+def _():
+    from googlecast_mcp import tts
+
+    fake, state = _fake_edge_tts(_write_ok)
+    with tmpdir() as d, swap(tts, "edge_tts", fake):
+        p = asyncio.run(tts.synthesize("một hai ba", cache_dir=d))
+        p.write_bytes(b"")  # giả lập lần chạy trước hỏng giữa chừng
+        again = asyncio.run(tts.synthesize("một hai ba", cache_dir=d))
+        want(again == p, "phải render lại đúng đường dẫn cũ")
+        want(again.stat().st_size > 0, "file 0 byte KHÔNG được dùng lại")
+        want(state["calls"] == 2, f"phải render lại, số lần render = {state['calls']}")
+
+
+@check("tts_retries_three_times")
+def _():
+    from googlecast_mcp import tts
+
+    async def always_fail(comm, path):
+        raise OSError("Cannot connect to host")
+
+    fake, state = _fake_edge_tts(always_fail)
+    # Bọc asyncio bằng proxy: KHÔNG gán đè lên asyncio.sleep toàn cục.
+    fast = ModuleProxy(asyncio, sleep=lambda *_a, **_k: asyncio.sleep(0))
+    with tmpdir() as d, swap(tts, "edge_tts", fake), swap(tts, "asyncio", fast):
+        try:
+            asyncio.run(tts.synthesize("thử lại", cache_dir=d))
+        except RuntimeError as exc:
+            want("3 attempts" in str(exc), f"thông điệp lỗi phải nói rõ số lần thử: {exc}")
+        else:
+            raise AssertionError("render hỏng liên tục phải ném RuntimeError")
+        want(state["calls"] == 3, f"phải thử đúng 3 lần, đã thử {state['calls']}")
+
+
+@check("tts_leaves_no_zero_byte_file")
+def _():
+    from googlecast_mcp import tts
+
+    async def create_then_fail(comm, path):
+        Path(path).write_bytes(b"")  # save() tạo file rồi mới hỏng
+        raise OSError("Cannot connect to host")
+
+    fake, _state = _fake_edge_tts(create_then_fail)
+    fast = ModuleProxy(asyncio, sleep=lambda *_a, **_k: asyncio.sleep(0))
+    with tmpdir() as d, swap(tts, "edge_tts", fake), swap(tts, "asyncio", fast):
+        with contextlib.suppress(RuntimeError):
+            asyncio.run(tts.synthesize("hỏng", cache_dir=d))
+        # Đếm KHI thư mục tạm còn sống — đóng trước rồi mới đếm là đếm chỗ trống.
+        leftovers = [p.name for p in d.iterdir()]
+        want(leftovers == [], f"không được để lại file 0 byte: {leftovers}")
+
+
+@check("tts_serializes_concurrent_renders")
+def _():
+    from googlecast_mcp import tts
+
+    fake, state = _fake_edge_tts(_write_ok)
+
+    async def scenario(cache):
+        await asyncio.gather(
+            *(tts.synthesize(f"câu số {i}", cache_dir=cache) for i in range(6))
+        )
+
+    with tmpdir() as d, swap(tts, "edge_tts", fake):
+        started = time.monotonic()
+        asyncio.run(scenario(d))
+        elapsed = time.monotonic() - started
+        files = sorted(p for p in d.iterdir() if p.stat().st_size > 0)
+    want(state["calls"] == 6, f"phải render đủ 6 câu, được {state['calls']}")
+    want(len(files) == 6, f"phải ra 6 file có nội dung, được {len(files)}")
+    want(
+        state["max_live"] == 1,
+        f"các lần render KHÔNG được chồng lên nhau; cao nhất cùng lúc = {state['max_live']}",
+    )
+    want(elapsed < 5, f"tuần tự hoá không được biến thành treo: {elapsed:.1f}s")
+
+
+@check("tts_lock_per_loop")
+def _():
+    """Khoá phải theo TỪNG vòng lặp: một tiến trình gọi asyncio.run() hai lần,
+    lần nào cũng có tranh chấp, cả hai đều phải chạy được."""
+    from googlecast_mcp import tts
+
+    fake, state = _fake_edge_tts(_write_ok)
+
+    async def contended(cache, salt):
+        # Hai lời gọi cùng lúc => chắc chắn có tranh chấp khoá.
+        await asyncio.gather(
+            tts.synthesize(f"vòng {salt} a", cache_dir=cache),
+            tts.synthesize(f"vòng {salt} b", cache_dir=cache),
+        )
+
+    with tmpdir() as d, swap(tts, "edge_tts", fake):
+        asyncio.run(contended(d, 1))
+        asyncio.run(contended(d, 2))  # vòng lặp MỚI, khoá mức module sẽ chết ở đây
+        made = len([p for p in d.iterdir() if p.stat().st_size > 0])
+    want(made == 4, f"cả hai vòng lặp đều phải render được, chỉ có {made}/4 file")
+    want(state["calls"] == 4, f"số lần render = {state['calls']}, phải là 4")
+
+
+@check("tts_cache_dir_env_override")
+def _():
+    from googlecast_mcp import tts
+
+    with tmpdir() as d:
+        with swap_env("GOOGLECAST_MCP_CACHE", str(d / "cache")):
+            got = tts.default_cache_dir()
+        want(got == d / "cache", f"GOOGLECAST_MCP_CACHE phải quyết định thư mục cache: {got}")
+        want(got.is_dir(), "thư mục cache phải được tạo sẵn")
+
+
+# ==========================================================================
+# media_server
+# ==========================================================================
+
+
+@check("media_binds_all_interfaces")
+def _():
+    from googlecast_mcp.media_server import MediaServer
+
+    with tmpdir() as d:
+        srv = MediaServer(d, host="10.9.9.9", port=0)
+        try:
+            srv.start()
+            bind = srv._httpd.server_address[0]
+            want(
+                bind == "0.0.0.0",
+                f"phải bind mọi giao diện để loa ở mạng khác tới được, đang bind {bind}",
+            )
+        finally:
+            stop_quietly(srv)
+
+
+@check("media_url_uses_advertised_host")
+def _():
+    from googlecast_mcp.media_server import MediaServer
+
+    with tmpdir() as d:
+        (d / "a.mp3").write_bytes(b"x")
+        srv = MediaServer(d, host="10.9.9.9", port=0)
+        try:
+            url = srv.url_for(d / "a.mp3")
+            want(
+                url.startswith("http://10.9.9.9:"),
+                f"URL quảng bá phải dùng địa chỉ LAN chứ không phải địa chỉ bind: {url}",
+            )
+            want(url.endswith("/a.mp3"), f"URL sai đuôi: {url}")
+            want(srv.port != 0, "sau khi start phải biết cổng thật")
+        finally:
+            stop_quietly(srv)
+
+
+@check("media_url_quotes_special_chars")
+def _():
+    from googlecast_mcp.media_server import MediaServer
+
+    with tmpdir() as d:
+        name = "cơm chín.mp3"
+        (d / name).write_bytes(b"x")
+        srv = MediaServer(d, host="127.0.0.1", port=0)
+        try:
+            url = srv.url_for(d / name)
+            want(" " not in url, f"URL không được chứa khoảng trắng thô: {url}")
+            want("%20" in url, f"khoảng trắng phải được mã hoá: {url}")
+        finally:
+            stop_quietly(srv)
+
+
+@check("media_actually_serves_the_file")
+def _():
+    from googlecast_mcp.media_server import MediaServer
+
+    payload = b"ID3" + b"\x00" * 64 + b"end"
+    with tmpdir() as d:
+        (d / "clip.mp3").write_bytes(payload)
+        srv = MediaServer(d, host="127.0.0.1", port=0)
+        try:
+            url = srv.url_for(d / "clip.mp3")
+            # Đọc XONG nội dung khi server và thư mục tạm còn sống.
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                code, body = resp.status, resp.read()
+            want(code == 200, f"phải phục vụ được file, mã {code}")
+            want(body == payload, "nội dung tải về phải khớp file gốc")
+        finally:
+            stop_quietly(srv)
+
+
+@check("media_set_port_after_start_is_refused")
+def _():
+    from googlecast_mcp.media_server import MediaServer
+
+    with tmpdir() as d:
+        srv = MediaServer(d, host="127.0.0.1", port=0)
+        try:
+            srv.start()
             try:
-                await tts.synthesize("xin chào", cache_dir=Path(tmp))
+                srv.set_port(8797)
             except RuntimeError:
                 pass
-            leftovers = [p for p in Path(tmp).iterdir() if p.stat().st_size == 0]
-            assert not leftovers, f"còn đọng file 0 byte: {leftovers}"
-
-    asyncio.run(run())
-
-
-@check("tts.synthesize.empty_render_is_failure_not_success")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts("empty", fast_retry=True):
-            try:
-                await tts.synthesize("xin chào", cache_dir=Path(tmp))
-            except RuntimeError as exc:
-                assert "no audio" in str(exc) or "3 attempts" in str(exc)
-                return
-            raise AssertionError("save() không tạo audio nào mà vẫn báo thành công")
-
-    asyncio.run(run())
-
-
-@check("tts.fanout.six_concurrent_all_succeed")
-def _():
-    """Dồn 6 yêu cầu song song: tuần tự hoá phải giữ cho cả 6 cùng thành công.
-
-    Khẳng định nằm TRONG vòng đời của thư mục tạm — đếm sau khi tmpdir đóng
-    là đếm vào chỗ trống, đỏ bừa mà không phải lỗi sản phẩm.
-    """
-
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp, fake_tts():
-            paths = await asyncio.gather(
-                *(tts.synthesize(f"câu số {i}", cache_dir=Path(tmp)) for i in range(6))
-            )
-            ok = [p for p in paths if p.exists() and p.stat().st_size > 0]
-            assert len(ok) == 6, f"chỉ {len(ok)}/6 render thành công"
-            assert len({p.name for p in paths}) == 6
-
-    asyncio.run(run())
-
-
-@check("tts.lock.is_per_event_loop_under_contention")
-def _():
-    """Khoá phải theo TỪNG vòng lặp.
-
-    Điều kiện thật để lộ lỗi không phải "gọi asyncio.run() hai lần" — mà là
-    vòng lặp thứ nhất THỰC SỰ CÓ TRANH CHẤP trên khoá. Đường nhanh của
-    Lock.acquire() trả về trước khi chạm _get_loop(), nên một khoá mức module
-    chỉ tự gắn vào vòng lặp khi có hai render chồng nhau. Phải gây tranh chấp
-    ở vòng 1 rồi mới thử vòng 2.
-    """
-    with tempfile.TemporaryDirectory() as tmp, fake_tts():
-
-        async def contended(tag):
-            return await asyncio.gather(
-                *(tts.synthesize(f"{tag}-{i}", cache_dir=Path(tmp)) for i in range(2))
-            )
-
-        first = asyncio.run(contended("v1"))
-        second = asyncio.run(contended("v2"))  # RuntimeError nếu khoá gắn nhầm vòng lặp
-        assert len(first) == 2 and len(second) == 2
-        assert all(p.stat().st_size > 0 for p in first + second)
-
-
-@check("tts.cache_dir.env_override")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        old = os.environ.get("GOOGLECAST_MCP_CACHE")
-        os.environ["GOOGLECAST_MCP_CACHE"] = f"{tmp}/c"
-        try:
-            d = tts.default_cache_dir()
-            assert d == Path(tmp) / "c" and d.is_dir()
-        finally:
-            if old is None:
-                os.environ.pop("GOOGLECAST_MCP_CACHE", None)
             else:
-                os.environ["GOOGLECAST_MCP_CACHE"] = old
-
-
-# ==========================================================================
-# media_server.py
-# ==========================================================================
-
-
-@check("media.lan_ip.returns_ipv4")
-def _():
-    ip = ms.lan_ip()
-    parts = ip.split(".")
-    assert len(parts) == 4 and all(p.isdigit() for p in parts), ip
-
-
-@check("media.url_for.shape")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        f = Path(tmp) / "a.mp3"
-        f.write_bytes(b"x")
-        server = ms.MediaServer(Path(tmp), host="10.0.0.5", port=0)
-        try:
-            url = server.url_for(f)
-            # Cổng phải là cổng ĐÃ BIND thật. So url với chính server.port là
-            # tự so với chính mình: server chưa chạy thì cả hai cùng bằng 0 và
-            # phép so vẫn xanh — đúng một dạng test giả.
-            assert server.port != 0, "url_for() chưa khởi động server, cổng vẫn là 0"
-            assert url == f"http://10.0.0.5:{server.port}/a.mp3", url
+                raise AssertionError("đổi cổng khi đang chạy phải bị từ chối")
         finally:
-            server.stop()
+            stop_quietly(srv)
 
 
-@check("media.url_for.percent_encodes")
+@check("media_start_is_idempotent")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        f = Path(tmp) / "cơm chín.mp3"
-        f.write_bytes(b"x")
-        server = ms.MediaServer(Path(tmp), host="10.0.0.5", port=0)
+    from googlecast_mcp.media_server import MediaServer
+
+    with tmpdir() as d:
+        srv = MediaServer(d, host="127.0.0.1", port=0)
         try:
-            url = server.url_for(f)
-            assert " " not in url and url.endswith(".mp3"), url
-            assert "%20" in url, url
+            srv.start()
+            first = srv.port
+            srv.start()
+            want(srv.port == first, "gọi start() hai lần không được dựng server thứ hai")
         finally:
-            server.stop()
+            stop_quietly(srv)
+        srv.stop()  # gọi lại khi đã tắt phải an toàn
 
 
-@check("media.url_for.starts_server_lazily")
+@check("media_lan_ip_falls_back_to_loopback")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        f = Path(tmp) / "a.mp3"
-        f.write_bytes(b"x")
-        server = ms.MediaServer(Path(tmp), host="127.0.0.1", port=0)
-        try:
-            assert server._httpd is None
-            server.url_for(f)
-            assert server._httpd is not None
-        finally:
-            server.stop()
+    from googlecast_mcp import media_server
 
+    class DeadSocket:
+        def __init__(self, *a, **k):
+            pass
 
-@check("media.serves_file_over_http")
-def _():
-    """Thiết bị Cast TỰ đi tải file — phải tải được thật, không chỉ dựng URL."""
-    with tempfile.TemporaryDirectory() as tmp:
-        f = Path(tmp) / "a.mp3"
-        f.write_bytes(b"ID3fake-audio-bytes")
-        server = ms.MediaServer(Path(tmp), host="127.0.0.1", port=free_port())
-        try:
-            url = server.url_for(f)
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                assert resp.status == 200
-                assert resp.read() == b"ID3fake-audio-bytes"
-        finally:
-            server.stop()
+        def connect(self, addr):
+            raise OSError("network unreachable")
 
+        def getsockname(self):
+            raise AssertionError("không được hỏi tên socket sau khi connect hỏng")
 
-@check("media.binds_all_interfaces")
-def _():
-    """Bind 0.0.0.0 nhưng quảng bá host riêng — hai thứ KHÁC NHAU."""
-    with tempfile.TemporaryDirectory() as tmp:
-        server = ms.MediaServer(Path(tmp), host="10.0.0.5", port=0)
-        try:
-            server.start()
-            assert server._httpd.server_address[0] == "0.0.0.0"
-            assert server._host == "10.0.0.5"
-        finally:
-            server.stop()
+        def close(self):
+            pass
 
-
-@check("media.set_port.pins_port")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        port = free_port()
-        server = ms.MediaServer(Path(tmp), host="127.0.0.1", port=0)
-        try:
-            server.set_port(port)
-            server.start()
-            assert server.port == port
-        finally:
-            server.stop()
-
-
-@check("media.set_port.rejected_while_running")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        server = ms.MediaServer(Path(tmp), host="127.0.0.1", port=0)
-        try:
-            server.start()
-            try:
-                server.set_port(free_port())
-            except RuntimeError:
-                return
-            raise AssertionError("đổi cổng lúc đang chạy lẽ ra phải bị từ chối")
-        finally:
-            server.stop()
-
-
-@check("media.start_is_idempotent")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        server = ms.MediaServer(Path(tmp), host="127.0.0.1", port=0)
-        try:
-            server.start()
-            first = server.port
-            server.start()
-            assert server.port == first
-        finally:
-            server.stop()
-
-
-@check("media.stop_is_safe_when_not_running")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        ms.MediaServer(Path(tmp)).stop()  # không được ném lỗi
-
-
-@check("media.creates_directory")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp) / "chua-co"
-        server = ms.MediaServer(d, host="127.0.0.1", port=0)
-        try:
-            server.start()
-            assert d.is_dir()
-        finally:
-            server.stop()
-
-
-# ==========================================================================
-# cast_manager.py
-# ==========================================================================
-
-
-@check("cast.guess_content_type.audio")
-def _():
-    assert cm._guess_content_type("http://h/a.mp3") == "audio/mpeg"
-    assert cm._guess_content_type("http://h/a.flac") == "audio/flac"
-
-
-@check("cast.guess_content_type.video")
-def _():
-    assert cm._guess_content_type("http://h/a.mp4") == "video/mp4"
-    assert cm._guess_content_type("http://h/a.webm") == "video/webm"
-
-
-@check("cast.guess_content_type.ignores_query_string")
-def _():
-    assert cm._guess_content_type("http://h/a.mp3?token=1") == "audio/mpeg"
-
-
-@check("cast.guess_content_type.case_insensitive")
-def _():
-    assert cm._guess_content_type("http://h/A.MP3") == "audio/mpeg"
-
-
-@check("cast.resolve.by_friendly_name_case_insensitive")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        mgr = make_manager([FakeCast("Kitchen speaker", "u1")], Path(tmp) / "s.json")
-        assert mgr._resolve_locally("kitchen SPEAKER") is not None
-
-
-@check("cast.resolve.by_uuid")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        mgr = make_manager([FakeCast("Kitchen speaker", "u1")], Path(tmp) / "s.json")
-        assert mgr._resolve_locally("u1") is not None
-
-
-@check("cast.resolve.unknown_is_none")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        mgr = make_manager([FakeCast("Kitchen speaker", "u1")], Path(tmp) / "s.json")
-        assert mgr._resolve_locally("Không có") is None
-
-
-@check("cast.resolve.saved_address_tried_before_rescan")
-def _():
-    """mDNS bỏ sót thiết bị ĐÃ LƯU không được thành DeviceNotFoundError."""
-    with tempfile.TemporaryDirectory() as tmp:
-        saved = FakeCast("Kitchen speaker", "11111111-1111-1111-1111-111111111111")
-        mgr = make_manager([saved], Path(tmp) / "s.json")
-        mgr._devices.clear()  # mDNS đã sót nó khỏi lần quét này
-        with fake_pychromecast(casts=[], from_host=saved) as seen:
-            found = mgr._resolve("Kitchen speaker")
-            assert found is saved
-            assert seen["from_host"], "chưa hề thử địa chỉ đã lưu"
-            assert seen["discover"] == 0, "quét lại dù địa chỉ đã lưu vẫn dùng được"
-
-
-@check("cast.resolve.raises_with_known_devices_listed")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        mgr = make_manager([FakeCast("Kitchen speaker", "u1")], Path(tmp) / "s.json")
-        with fake_pychromecast(casts=[], from_host=None):
-            try:
-                mgr._resolve("Ma quái")
-            except cm.DeviceNotFoundError as exc:
-                assert "Kitchen speaker" in str(exc), str(exc)
-                return
-            raise AssertionError("thiết bị không tồn tại mà không báo lỗi")
-
-
-@check("cast.set_volume.clamps_range")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        c = FakeCast("Kitchen speaker", "u1")
-        mgr = make_manager([c], Path(tmp) / "s.json")
-        assert mgr.set_volume("Kitchen speaker", 5.0) == 1.0
-        assert mgr.set_volume("Kitchen speaker", -3.0) == 0.0
-        assert mgr.set_volume("Kitchen speaker", 0.4) == 0.4
-        assert [lv for name, lv in c.calls if name == "set_volume"] == [1.0, 0.0, 0.4]
-
-
-@check("cast.play_media.guesses_type_and_returns_status")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        c = FakeCast("Kitchen speaker", "u1")
-        mgr = make_manager([c], Path(tmp) / "s.json")
-        out = mgr.play_media("Kitchen speaker", "http://h/a.mp3", None, "chào")
-        assert c.media_controller.calls[0] == (
-            "play_media",
-            "http://h/a.mp3",
-            "audio/mpeg",
-            "chào",
+    fake_socket = ModuleProxy(socket, socket=DeadSocket)
+    with swap(media_server, "socket", fake_socket):
+        want(
+            media_server.lan_ip() == "127.0.0.1",
+            "mất mạng thì lan_ip() phải lui về 127.0.0.1 chứ không ném lỗi",
         )
-        assert out["media"]["content_id"] == "http://h/a.mp3"
 
 
-@check("cast.status.shape")
+# ==========================================================================
+# cast_manager
+# ==========================================================================
+
+
+@check("guess_content_type_audio")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        mgr = make_manager([FakeCast("Kitchen speaker", "u1")], Path(tmp) / "s.json")
-        s = mgr.status("Kitchen speaker")
-        assert set(s) == {"device", "app", "media"}
-        assert set(s["media"]) == {
-            "player_state",
-            "title",
-            "content_id",
-            "content_type",
-            "duration",
-            "current_time",
-        }
+    from googlecast_mcp.cast_manager import _guess_content_type
+
+    want(_guess_content_type("http://h/a.mp3") == "audio/mpeg", "mp3 phải ra audio/mpeg")
+    want(_guess_content_type("http://h/A.MP3") == "audio/mpeg", "phải bỏ qua hoa/thường")
 
 
-@check("cast.info.fields")
+@check("guess_content_type_ignores_query")
 def _():
-    info = cm.CastManager._info(FakeCast("Kitchen speaker", "u1", "audio", "192.168.1.22"))
-    assert set(info) == {
-        "friendly_name",
-        "uuid",
-        "model_name",
-        "manufacturer",
-        "host",
-        "port",
-        "cast_type",
-    }
-    assert info["host"] == "192.168.1.22" and info["cast_type"] == "audio"
+    from googlecast_mcp.cast_manager import _guess_content_type
+
+    got = _guess_content_type("http://h/a.mp3?token=1")
+    want(got == "audio/mpeg", f"phải bỏ chuỗi truy vấn trước khi đoán, được {got}")
 
 
-@check("cast.connect_waits_before_control")
+@check("guess_content_type_default")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        c = FakeCast("Kitchen speaker", "u1")
-        mgr = make_manager([c], Path(tmp) / "s.json")
-        mgr.pause("Kitchen speaker")
-        assert c.waited, "điều khiển thiết bị trước khi kết nối xong"
-        assert ("pause",) in c.media_controller.calls
+    from googlecast_mcp.cast_manager import _guess_content_type
+
+    want(_guess_content_type("http://h/stream") == "video/mp4", "không rõ đuôi thì mặc định mp4")
 
 
-@check("cast.list_speakers.filters_video")
+@check("manager_resolves_name_case_insensitively")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        mgr = make_manager(
+    from googlecast_mcp.cast_manager import CastManager
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    with tmpdir() as d:
+        m = CastManager(SpeakerStore(d / "s.json"))
+        cast = FakeCast("Kitchen speaker", "u1")
+        m._devices["u1"] = cast
+        want(m._resolve("kitchen SPEAKER") is cast, "tên phải khớp không phân biệt hoa thường")
+        want(m._resolve("u1") is cast, "uuid phải khớp")
+        want(m._resolve("  Kitchen speaker  ") is cast, "phải cắt khoảng trắng thừa")
+
+
+@check("manager_connects_saved_when_mdns_misses")
+def _():
+    """mDNS sót thiết bị ĐÃ LƯU thì phải nối thẳng địa chỉ đã lưu, không được
+    báo 'không tìm thấy' một cách tự mâu thuẫn."""
+    from googlecast_mcp import cast_manager
+    from googlecast_mcp.cast_manager import CastManager
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    saved = FakeCast("Kitchen speaker", "11111111-1111-1111-1111-111111111111")
+    hits = []
+
+    def from_host(info):
+        hits.append(info)
+        return saved
+
+    # Quét mDNS trả về RỖNG (đúng cảnh sót thiết bị), nhưng địa chỉ lưu vẫn nối được.
+    fake = fake_pychromecast(casts=(), from_host=from_host)
+    with tmpdir() as d:
+        store = SpeakerStore(d / "s.json")
+        store.save(
             [
-                FakeCast("Kitchen speaker", "u1", "audio"),
-                FakeCast("Living room TV", "u2", "cast"),
-            ],
-            Path(tmp) / "s.json",
+                {
+                    "uuid": "11111111-1111-1111-1111-111111111111",
+                    "friendly_name": "Kitchen speaker",
+                    "cast_type": "audio",
+                    "host": "192.168.1.22",
+                    "port": 8009,
+                    "model_name": "Google Home",
+                }
+            ]
         )
-        assert {d["friendly_name"] for d in mgr.list_speakers()} == {"Kitchen speaker"}
+        m = CastManager(store)
+        with swap(cast_manager, "pychromecast", fake):
+            got = m._resolve("Kitchen speaker")
+        want(got is saved, "phải nối được qua địa chỉ đã lưu")
+        want(len(hits) == 1, f"phải thử đúng một lần nối thẳng, có {len(hits)}")
 
 
-@check("cast.discover.persists_to_store")
+@check("manager_unknown_device_raises")
 def _():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "s.json"
-        mgr = cm.CastManager(store=st.SpeakerStore(path))
-        with fake_pychromecast(casts=[FakeCast("Kitchen speaker", "u1")]):
-            mgr.discover(0.1)
-        assert st.SpeakerStore(path).load()[0]["friendly_name"] == "Kitchen speaker"
+    from googlecast_mcp import cast_manager
+    from googlecast_mcp.cast_manager import CastManager, DeviceNotFoundError
+    from googlecast_mcp.speaker_store import SpeakerStore
 
-
-# ==========================================================================
-# server.py — chọn loa, say()
-# ==========================================================================
-
-TOOL_NAMES = {
-    "say",
-    "discover_devices",
-    "list_speakers",
-    "list_devices",
-    "get_status",
-    "play_media",
-    "play",
-    "pause",
-    "stop",
-    "seek",
-    "set_volume",
-    "set_muted",
-    "quit_app",
-}
-
-
-@check("server.tools.exact_set")
-def _():
-    """So TẬP tên tường minh, không so số lượng."""
-    names = {t.name for t in asyncio.run(srv.mcp.list_tools())}
-    assert names == TOOL_NAMES, f"thừa {names - TOOL_NAMES}, thiếu {TOOL_NAMES - names}"
-
-
-@check("server.say.without_a_speaker_choice_plays_nothing")
-def _():
-    """Yêu cầu gốc #3: không chọn loa thì HỎI, tuyệt đối không phát."""
-
-    async def run():
-        speakers = [
-            FakeCast("Kitchen speaker", "u1", "audio"),
-            FakeCast("Bedroom speaker", "u2", "audio"),
-        ]
-        with swapped_server(speakers), fake_tts() as fc:
-            out = await srv.say("Cơm đã chín rồi")
-            assert out["status"] == "needs_speaker_selection", out["status"]
-            assert {s["friendly_name"] for s in out["speakers"]} == {
-                "Kitchen speaker",
-                "Bedroom speaker",
-            }
-            assert fc.calls == [], "đã render TTS dù chưa chọn loa"
-            for c in speakers:
-                assert c.media_controller.calls == [], "đã phát dù chưa chọn loa"
-
-    asyncio.run(run())
-
-
-@check("server.say.no_speakers_on_network")
-def _():
-    async def run():
-        with swapped_server([]), fake_pychromecast(casts=[]), fake_tts():
-            out = await srv.say("Cơm đã chín rồi")
-            assert out["status"] == "no_speakers_found", out["status"]
-
-    asyncio.run(run())
-
-
-@check("server.say.single_named_speaker")
-def _():
-    async def run():
-        kitchen = FakeCast("Kitchen speaker", "u1", "audio")
-        other = FakeCast("Bedroom speaker", "u2", "audio")
-        with swapped_server([kitchen, other]), fake_tts():
-            out = await srv.say("Cơm đã chín rồi", "Kitchen speaker")
-            assert out["status"] == "ok", out
-            assert out["results"] == [{"speaker": "Kitchen speaker", "status": "playing"}]
-            assert len(kitchen.media_controller.calls) == 1
-            assert other.media_controller.calls == []
-
-    asyncio.run(run())
-
-
-@check("server.say.comma_separated_list")
-def _():
-    async def run():
-        a = FakeCast("Kitchen speaker", "u1", "audio")
-        b = FakeCast("Bedroom speaker", "u2", "audio")
-        with swapped_server([a, b]), fake_tts():
-            out = await srv.say("Chào", "Kitchen speaker, Bedroom speaker")
-            assert {r["speaker"] for r in out["results"]} == {
-                "Kitchen speaker",
-                "Bedroom speaker",
-            }
-            assert all(r["status"] == "playing" for r in out["results"])
-
-    asyncio.run(run())
-
-
-@check("server.say.all_excludes_speaker_groups")
-def _():
-    """Nhóm phát QUA thành viên: gộp cả nhóm lẫn thành viên = chồng luồng.
-
-    API không phân biệt được (cả hai đều 'playing'); dấu vết duy nhất quan sát
-    được ở tầng này là TẬP tên đã cast — nên phải so đúng tập đó.
-    """
-
-    async def run():
-        group = FakeCast("Family speaker group", "g1", "group", host="192.168.1.22")
-        member = FakeCast("Kitchen speaker", "u1", "audio", host="192.168.1.22")
-        other = FakeCast("Bedroom speaker", "u2", "audio", host="192.168.1.23")
-        with swapped_server([group, member, other]), fake_tts():
-            out = await srv.say("Chào", "all")
-            assert {r["speaker"] for r in out["results"]} == {
-                "Kitchen speaker",
-                "Bedroom speaker",
-            }, out["results"]
-            assert group.media_controller.calls == [], "nhóm bị cast chồng lên thành viên"
-
-    asyncio.run(run())
-
-
-@check("server.say.vietnamese_all_keyword")
-def _():
-    async def run():
-        a = FakeCast("Kitchen speaker", "u1", "audio")
-        b = FakeCast("Bedroom speaker", "u2", "audio")
-        with swapped_server([a, b]), fake_tts():
-            out = await srv.say("Chào", "tất cả")
-            assert {r["speaker"] for r in out["results"]} == {
-                "Kitchen speaker",
-                "Bedroom speaker",
-            }
-
-    asyncio.run(run())
-
-
-@check("server.say.broken_element_does_not_sink_the_rest")
-def _():
-    async def run():
-        kitchen = FakeCast("Kitchen speaker", "u1", "audio")
-        with swapped_server([kitchen]), fake_tts(), fake_pychromecast(
-            casts=[], from_host=None
-        ):
-            out = await srv.say("Chào", "Kitchen speaker, Loa Ma")
-            by_name = {r["speaker"]: r for r in out["results"]}
-            assert by_name["Kitchen speaker"]["status"] == "playing"
-            assert by_name["Loa Ma"]["status"] == "error"
-            assert out["status"] == "ok", "một phần tử hỏng không được đánh sập cả lệnh"
-
-    asyncio.run(run())
-
-
-@check("server.say.all_broken_reports_failed")
-def _():
-    async def run():
-        with swapped_server([FakeCast("Kitchen speaker", "u1", "audio")]), fake_tts(), (
-            fake_pychromecast(casts=[], from_host=None)
-        ):
-            out = await srv.say("Chào", "Loa Ma")
-            assert out["status"] == "failed", out["status"]
-
-    asyncio.run(run())
-
-
-@check("server.say.audio_url_is_fetchable_by_the_speaker")
-def _():
-    """URL trao cho loa phải TẢI ĐƯỢC thật — loa tự đi lấy file."""
-
-    async def run():
-        kitchen = FakeCast("Kitchen speaker", "u1", "audio")
-        with swapped_server([kitchen]) as (_m, media, _c), fake_tts():
-            media._host = "127.0.0.1"
-            out = await srv.say("Cơm đã chín rồi", "Kitchen speaker")
-            url = out["audio_url"]
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                assert resp.status == 200
-                assert len(resp.read()) > 0
-            cast_url = kitchen.media_controller.calls[0][1]
-            assert cast_url == url, "URL cast đi khác URL báo về"
-
-    asyncio.run(run())
-
-
-@check("server.say.casts_as_audio_mpeg")
-def _():
-    async def run():
-        kitchen = FakeCast("Kitchen speaker", "u1", "audio")
-        with swapped_server([kitchen]), fake_tts():
-            await srv.say("Chào", "Kitchen speaker")
-            assert kitchen.media_controller.calls[0][2] == "audio/mpeg"
-
-    asyncio.run(run())
-
-
-@check("server.say.reports_resolved_voice")
-def _():
-    async def run():
-        with swapped_server([FakeCast("Kitchen speaker", "u1", "audio")]), fake_tts():
-            out = await srv.say("Chào", "Kitchen speaker", voice="male")
-            assert out["voice"] == "vi-VN-NamMinhNeural", out["voice"]
-
-    asyncio.run(run())
-
-
-@check("server.list_speakers.scans_once_when_store_is_empty")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp:
-            old = srv._manager
-            srv._manager = cm.CastManager(store=st.SpeakerStore(Path(tmp) / "s.json"))
+    fake = fake_pychromecast(casts=(), from_host=None)
+    with tmpdir() as d:
+        m = CastManager(SpeakerStore(d / "s.json"))
+        with swap(cast_manager, "pychromecast", fake):
             try:
-                with fake_pychromecast(
-                    casts=[FakeCast("Kitchen speaker", "u1", "audio")]
-                ) as seen:
-                    out = await srv.list_speakers()
-                    assert seen["discover"] == 1, f"quét {seen['discover']} lần"
-                    assert [s["friendly_name"] for s in out] == ["Kitchen speaker"]
-            finally:
-                srv._manager = old
-
-    asyncio.run(run())
-
-
-# ==========================================================================
-# __main__.py — an ninh vận chuyển / CORS
-# ==========================================================================
-
-
-@check("entry.security.allows_lan_address")
-def _():
-    s = entry._transport_security("0.0.0.0", [])
-    assert ms.lan_ip() in s.allowed_hosts
-
-
-@check("entry.security.wildcard_bind_not_treated_as_address")
-def _():
-    s = entry._transport_security("0.0.0.0", [])
-    assert "0.0.0.0" not in s.allowed_hosts
-    assert "::" not in s.allowed_hosts
-
-
-@check("entry.security.bare_host_and_port_suffix")
-def _():
-    """Proxy ở cổng mặc định gửi Host KHÔNG kèm ':port' — phải chấp nhận cả hai."""
-    s = entry._transport_security("0.0.0.0", ["google-cast.adrec.cloud"])
-    assert "google-cast.adrec.cloud" in s.allowed_hosts
-    assert "google-cast.adrec.cloud:*" in s.allowed_hosts
-
-
-@check("entry.security.https_origin_for_tls_proxy")
-def _():
-    s = entry._transport_security("0.0.0.0", ["google-cast.adrec.cloud"])
-    assert "https://google-cast.adrec.cloud" in s.allowed_origins
-    assert "http://google-cast.adrec.cloud" in s.allowed_origins
-
-
-@check("entry.security.loopback_always_allowed")
-def _():
-    s = entry._transport_security("0.0.0.0", [])
-    assert {"127.0.0.1", "localhost", "[::1]"} <= set(s.allowed_hosts)
-
-
-@check("entry.security.browser_origin_passes_through")
-def _():
-    s = entry._transport_security("0.0.0.0", [], ["http://192.168.1.99:8383"])
-    assert "http://192.168.1.99:8383" in s.allowed_origins
-
-
-@check("entry.security.explicit_bind_host_allowed")
-def _():
-    s = entry._transport_security("192.168.1.128", [])
-    assert "192.168.1.128" in s.allowed_hosts
-
-
-# ==========================================================================
-# Tầng --online: edge-tts thật, không phát ra loa nào
-# ==========================================================================
-
-
-@check("online.tts.real_render_produces_audio", tier="online")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp:
-            p = await tts.synthesize("Cơm đã chín rồi", cache_dir=Path(tmp))
-            assert p.stat().st_size > 1000, f"file quá nhỏ: {p.stat().st_size} byte"
-            assert is_mp3(p.read_bytes()), p.read_bytes()[:4].hex()
-
-    asyncio.run(run())
-
-
-@check("online.tts.real_male_voice", tier="online")
-def _():
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp:
-            p = await tts.synthesize("Xin chào", voice="male", cache_dir=Path(tmp))
-            assert p.stat().st_size > 1000
-
-    asyncio.run(run())
-
-
-@check("online.tts.real_fanout_six_all_succeed", tier="online")
-def _():
-    """Bằng chứng bền theo THỜI GIAN và PHẠM VI: đếm khi tmpdir còn sống."""
-
-    async def run():
-        with tempfile.TemporaryDirectory() as tmp:
-            started = time.monotonic()
-            paths = await asyncio.gather(
-                *(
-                    tts.synthesize(f"Câu số {i}", cache_dir=Path(tmp))
-                    for i in range(6)
-                ),
-                return_exceptions=True,
-            )
-            elapsed = time.monotonic() - started
-            errors = [p for p in paths if isinstance(p, Exception)]
-            assert not errors, f"{len(errors)}/6 hỏng: {errors[:1]}"
-            ok = [p for p in paths if p.stat().st_size > 1000]
-            assert len(ok) == 6, f"chỉ {len(ok)}/6 có audio"
-            zero = [p for p in Path(tmp).iterdir() if p.stat().st_size == 0]
-            assert not zero, f"đọng file 0 byte: {zero}"
-            print(f"      (dồn 6 yêu cầu thật: {elapsed:.1f}s)")
-
-    asyncio.run(run())
-
-
-@check("online.tts.real_lock_survives_two_loops", tier="online")
-def _():
-    with tempfile.TemporaryDirectory() as tmp:
-
-        async def contended(tag):
-            return await asyncio.gather(
-                *(tts.synthesize(f"{tag} {i}", cache_dir=Path(tmp)) for i in range(2))
-            )
-
-        first = asyncio.run(contended("vòng một"))
-        second = asyncio.run(contended("vòng hai"))
-        assert all(p.stat().st_size > 1000 for p in first + second)
-
-
-@check("online.end_to_end.tts_then_http_fetch", tier="online")
-def _():
-    """TTS thật → media server thật → tải về thật. Không chạm thiết bị nào."""
-
-    async def run():
-        kitchen = FakeCast("Kitchen speaker", "u1", "audio")
-        with swapped_server([kitchen]) as (_m, media, _c):
-            media._host = "127.0.0.1"
-            out = await srv.say("Cơm đã chín rồi", "Kitchen speaker")
-            assert out["status"] == "ok"
-            with urllib.request.urlopen(out["audio_url"], timeout=10) as resp:
-                body = resp.read()
-            assert resp.status == 200 and len(body) > 1000, len(body)
-            assert is_mp3(body), body[:4].hex()
-
-    asyncio.run(run())
-
-
-# ==========================================================================
-# Tầng --hardware: PHÁT RA TIẾNG THẬT. Chỉ chạy khi đã xin phép.
-# ==========================================================================
-
-
-@check("hardware.say.plays_on_a_real_speaker", tier="hardware")
-def _():
-    """Bằng chứng bền: content_id khớp URL vừa cast + duration > 0.
-
-    Không được đòi thấy player_state == 'PLAYING': đo được say() mất 5.4s
-    trong khi clip chỉ 2.26s, tức lúc say() trả về loa đã phát xong — đòi
-    'PLAYING' là đòi một trạng thái đã hết hạn.
-
-    Media server phải còn SỐNG cho tới khi loa tải xong file: dừng nó ngay
-    sau say() là cắt nguồn ngay giữa lúc loa đang lấy dữ liệu.
-    """
-
-    async def run():
-        name = os.environ.get("GOOGLECAST_MCP_TEST_SPEAKER")
-        assert name, "đặt GOOGLECAST_MCP_TEST_SPEAKER=<tên loa> trước khi chạy"
-        out = await srv.say("Đây là bài kiểm tra", name)
-        assert out["status"] == "ok", out
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            status = await asyncio.to_thread(srv._manager.status, name)
-            media = status["media"]
-            if media.get("content_id") == out["audio_url"] and (media.get("duration") or 0) > 0:
+                m._resolve("Không có loa này")
+            except DeviceNotFoundError as exc:
+                want("Known devices" in str(exc), f"lỗi phải liệt kê thiết bị đã biết: {exc}")
                 return
-            await asyncio.sleep(1)
-        raise AssertionError("loa không hề nhận đúng URL vừa cast trong 30s")
+        raise AssertionError("thiết bị lạ phải ném DeviceNotFoundError")
 
-    asyncio.run(run())
+
+@check("manager_volume_is_clamped")
+def _():
+    from googlecast_mcp.cast_manager import CastManager
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    with tmpdir() as d:
+        m = CastManager(SpeakerStore(d / "s.json"))
+        cast = FakeCast("Kitchen speaker", "u1")
+        m._devices["u1"] = cast
+        want(m.set_volume("u1", 5.0) == 1.0, "trên 1.0 phải kẹp về 1.0")
+        want(m.set_volume("u1", -3.0) == 0.0, "dưới 0.0 phải kẹp về 0.0")
+        want(m.set_volume("u1", 0.4) == 0.4, "giá trị hợp lệ phải giữ nguyên")
+        want(cast.volume_calls == [1.0, 0.0, 0.4], f"đã gửi xuống thiết bị: {cast.volume_calls}")
+
+
+@check("manager_discover_persists_devices")
+def _():
+    from googlecast_mcp import cast_manager
+    from googlecast_mcp.cast_manager import CastManager
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    casts = [
+        FakeCast("Kitchen speaker", "u1", "audio"),
+        FakeCast("Working display", "u2", "cast"),
+    ]
+    fake = fake_pychromecast(casts=casts, from_host=None)
+    with tmpdir() as d:
+        store = SpeakerStore(d / "s.json")
+        m = CastManager(store)
+        with swap(cast_manager, "pychromecast", fake):
+            found = m.discover(0.1)
+        want(len(found) == 2, f"phải tìm ra 2 thiết bị, được {len(found)}")
+        want(len(store.load()) == 2, "kết quả quét phải được LƯU xuống đĩa")
+        want(
+            [s["friendly_name"] for s in m.list_speakers()] == ["Kitchen speaker"],
+            "list_speakers phải bỏ thiết bị hình ảnh",
+        )
+
+
+@check("manager_status_reports_media_fields")
+def _():
+    from googlecast_mcp.cast_manager import CastManager
+    from googlecast_mcp.speaker_store import SpeakerStore
+
+    with tmpdir() as d:
+        m = CastManager(SpeakerStore(d / "s.json"))
+        cast = FakeCast("Kitchen speaker", "u1")
+        m._devices["u1"] = cast
+        out = m.play_media("u1", "http://h/x.mp3", None, "chào")
+        want(out["media"]["content_id"] == "http://h/x.mp3", "content_id phải khớp URL đã cast")
+        want(out["media"]["player_state"] == "PLAYING", "trạng thái phát sai")
+        want(out["device"]["friendly_name"] == "Kitchen speaker", "thiếu thông tin thiết bị")
+        want(
+            cast.media_controller.played[0][1] == "audio/mpeg",
+            "thiếu content_type thì phải tự đoán từ đuôi URL",
+        )
+        want(cast.waited >= 1, "phải chờ kết nối sẵn sàng trước khi điều khiển")
+
+
+# ==========================================================================
+# server (chọn loa, say)
+# ==========================================================================
+
+
+class FakeManager:
+    """Bản giả của CastManager ở mức server dùng tới."""
+
+    def __init__(self, speakers, fail_for=()):
+        self._speakers = list(speakers)
+        self._fail_for = set(fail_for)
+        self.cast_calls = []
+        self.discover_calls = 0
+
+    def list_speakers(self):
+        return list(self._speakers)
+
+    def list_cached(self):
+        return list(self._speakers)
+
+    def discover(self, timeout=5.0):
+        self.discover_calls += 1
+        return list(self._speakers)
+
+    def play_media(self, name, url, content_type=None, title=None):
+        self.cast_calls.append((name, url, content_type, title))
+        if name in self._fail_for:
+            raise RuntimeError(f"Device {name!r} did not respond.")
+        return {"device": {"friendly_name": name}, "media": {"content_id": url}}
+
+
+class FakeMediaServer:
+    def __init__(self, base="http://192.168.1.128:8766"):
+        self.base = base
+
+    def url_for(self, path):
+        return f"{self.base}/{Path(path).name}"
+
+
+SPEAKERS = [
+    {"friendly_name": "Kitchen speaker", "uuid": "u1", "cast_type": "audio", "host": "192.168.1.22"},
+    {"friendly_name": "Bedroom speaker", "uuid": "u2", "cast_type": "audio", "host": "192.168.1.23"},
+    {"friendly_name": "Living speaker", "uuid": "u3", "cast_type": "audio", "host": "192.168.1.24"},
+    {
+        "friendly_name": "Family speaker group",
+        "uuid": "u4",
+        "cast_type": "group",
+        "host": "192.168.1.22",
+    },
+]
+
+
+@contextlib.contextmanager
+def server_context(speakers=SPEAKERS, fail_for=()):
+    """Tráo TRỌN BỘ bối cảnh của server: cả trình quản lý loa LẪN media server.
+
+    Tráo nửa vời (chỉ _manager) từng làm url_for trỏ ra ngoài thư mục nó phục
+    vụ và lỗi hiện ra ở chỗ chẳng liên quan.
+    """
+    from googlecast_mcp import server as srv
+
+    manager = FakeManager(speakers, fail_for)
+    media = FakeMediaServer()
+    with swap(srv, "_manager", manager), swap(srv, "_media_server", media):
+        yield srv, manager, media
+
+
+def _fake_tts_module(srv):
+    """Bản giả tts dùng trong tầng offline: không gọi mạng, có ghi lại lời gọi."""
+    from googlecast_mcp import tts as real_tts
+
+    calls = []
+
+    async def synthesize(text, voice=None, rate="+0%", **kw):
+        calls.append((text, voice, rate))
+        return Path(tempfile.gettempdir()) / "gcmcp-eval-fake.mp3"
+
+    proxy = ModuleProxy(real_tts, synthesize=synthesize)
+    return proxy, calls
+
+
+@check("select_without_choice_asks_back")
+def _():
+    with server_context() as (srv, manager, _media):
+        out = asyncio.run(srv._select_targets(None))
+        names, prompt = out
+        want(names == [], "chưa chọn loa thì KHÔNG được có loa nào được chọn")
+        want(prompt is not None, "phải trả về dữ liệu để LLM hỏi lại")
+        want(
+            prompt["status"] == "needs_speaker_selection",
+            f"trạng thái sai: {prompt['status']}",
+        )
+        want(len(prompt["speakers"]) == 4, "phải kèm đủ danh sách loa cho người dùng chọn")
+        want("Kitchen speaker" in prompt["message"], "thông điệp phải kể tên loa")
+
+
+@check("select_no_speakers_status")
+def _():
+    with server_context(speakers=[]) as (srv, manager, _media):
+        names, prompt = asyncio.run(srv._select_targets(None))
+        want(names == [], "không có loa thì không chọn được gì")
+        want(prompt["status"] == "no_speakers_found", f"trạng thái sai: {prompt['status']}")
+        want(manager.discover_calls >= 1, "danh sách rỗng thì phải thử quét một lần")
+
+
+@check("select_all_excludes_groups")
+def _():
+    """'all' phải BỎ nhóm loa: nhóm phát qua chính các thành viên, gửi cả hai
+    thì một loa vật lý nhận hai luồng mà API vẫn báo 'playing'."""
+    with server_context() as (srv, _manager, _media):
+        for keyword in ("all", "tất cả", "ALL", "*"):
+            names, prompt = asyncio.run(srv._select_targets(keyword))
+            want(prompt is None, f"{keyword!r} là lựa chọn hợp lệ, không được hỏi lại")
+            want(
+                "Family speaker group" not in names,
+                f"{keyword!r} không được gồm nhóm loa: {names}",
+            )
+            want(len(names) == 3, f"{keyword!r} phải ra 3 loa riêng lẻ, được {names}")
+
+
+@check("select_comma_separated_list")
+def _():
+    with server_context() as (srv, _manager, _media):
+        names, prompt = asyncio.run(
+            srv._select_targets(" Kitchen speaker , Bedroom speaker ")
+        )
+        want(prompt is None, "danh sách tên là lựa chọn hợp lệ")
+        want(
+            names == ["Kitchen speaker", "Bedroom speaker"],
+            f"phải tách theo dấu phẩy và cắt khoảng trắng, được {names}",
+        )
+
+
+@check("select_group_by_name_still_allowed")
+def _():
+    with server_context() as (srv, _manager, _media):
+        names, prompt = asyncio.run(srv._select_targets("Family speaker group"))
+        want(prompt is None and names == ["Family speaker group"], f"gọi nhóm theo tên: {names}")
+
+
+@check("say_without_choice_plays_nothing")
+def _():
+    """Điểm an toàn quan trọng nhất: thiếu lựa chọn thì KHÔNG phát ra tiếng nào."""
+    with server_context() as (srv, manager, _media):
+        fake_tts, calls = _fake_tts_module(srv)
+        with swap(srv, "tts", fake_tts):
+            out = asyncio.run(srv.say("Cơm đã chín rồi"))
+        want(out["status"] == "needs_speaker_selection", f"trạng thái sai: {out['status']}")
+        want(manager.cast_calls == [], f"KHÔNG được cast gì cả, đã cast: {manager.cast_calls}")
+        want(calls == [], "cũng không nên tổng hợp giọng khi chưa biết phát ở đâu")
+
+
+@check("say_casts_to_chosen_speaker")
+def _():
+    with server_context() as (srv, manager, _media):
+        fake_tts, calls = _fake_tts_module(srv)
+        with swap(srv, "tts", fake_tts):
+            out = asyncio.run(srv.say("Cơm đã chín rồi", "Kitchen speaker"))
+        want(out["status"] == "ok", f"phải thành công: {out}")
+        want(len(manager.cast_calls) == 1, f"phải cast đúng một lần: {manager.cast_calls}")
+        name, url, ctype, title = manager.cast_calls[0]
+        want(name == "Kitchen speaker", f"sai loa: {name}")
+        want(ctype == "audio/mpeg", f"phải khai báo audio/mpeg, được {ctype}")
+        want(url.startswith("http://"), f"loa cần URL HTTP tải được, được {url}")
+        want(out["voice"] == "vi-VN-HoaiMyNeural", f"giọng mặc định sai: {out['voice']}")
+        want(calls and calls[0][0] == "Cơm đã chín rồi", "văn bản phải đi tới bộ tổng hợp")
+
+
+@check("say_isolates_one_broken_speaker")
+def _():
+    """Một phần tử hỏng không được kéo đổ cả lượt phát."""
+    with server_context(fail_for=["Ghost speaker"]) as (srv, manager, _media):
+        fake_tts, _calls = _fake_tts_module(srv)
+        with swap(srv, "tts", fake_tts):
+            out = asyncio.run(srv.say("thử", "Kitchen speaker,Ghost speaker"))
+        by_name = {r["speaker"]: r for r in out["results"]}
+        want(out["status"] == "ok", f"còn loa phát được thì tổng thể vẫn ok: {out['status']}")
+        want(by_name["Kitchen speaker"]["status"] == "playing", "loa tốt phải phát được")
+        want(by_name["Ghost speaker"]["status"] == "error", "loa hỏng phải báo lỗi riêng")
+        want("error" in by_name["Ghost speaker"], "phải kèm nội dung lỗi")
+
+
+@check("say_all_broken_is_failed")
+def _():
+    with server_context(fail_for=[s["friendly_name"] for s in SPEAKERS]) as (srv, _m, _media):
+        fake_tts, _calls = _fake_tts_module(srv)
+        with swap(srv, "tts", fake_tts):
+            out = asyncio.run(srv.say("thử", "all"))
+        want(out["status"] == "failed", f"không loa nào phát được thì phải là failed: {out['status']}")
+
+
+@check("server_exposes_thirteen_tools")
+def _():
+    from googlecast_mcp import server as srv
+
+    tools = asyncio.run(srv.mcp.list_tools())
+    names = sorted(t.name for t in tools)
+    expected = sorted(
+        [
+            "say",
+            "discover_devices",
+            "list_speakers",
+            "list_devices",
+            "get_status",
+            "play_media",
+            "play",
+            "pause",
+            "stop",
+            "seek",
+            "set_volume",
+            "set_muted",
+            "quit_app",
+        ]
+    )
+    want(names == expected, f"tập công cụ phải khớp đúng danh sách.\ncó : {names}\ncần: {expected}")
+
+
+@check("tool_descriptions_are_present")
+def _():
+    from googlecast_mcp import server as srv
+
+    tools = asyncio.run(srv.mcp.list_tools())
+    thin = [t.name for t in tools if not (t.description or "").strip()]
+    want(thin == [], f"LLM chọn công cụ bằng mô tả; các công cụ thiếu mô tả: {thin}")
+
+
+# ==========================================================================
+# __main__ — an ninh vận chuyển và CORS
+# ==========================================================================
+
+
+@contextlib.contextmanager
+def main_with_lan(ip="192.168.1.128"):
+    from googlecast_mcp import __main__ as entry
+
+    with swap(entry, "lan_ip", lambda: ip):
+        yield entry
+
+
+@check("security_allows_lan_address")
+def _():
+    """Client ở máy khác bị trả 421 nếu địa chỉ LAN không nằm trong allowlist."""
+    with main_with_lan() as entry:
+        s = entry._transport_security("0.0.0.0", [], [])
+    want("192.168.1.128" in s.allowed_hosts, f"thiếu địa chỉ LAN: {s.allowed_hosts}")
+    want("127.0.0.1" in s.allowed_hosts, "vẫn phải cho loopback")
+
+
+@check("security_allows_bare_host_without_port")
+def _():
+    """Proxy ở cổng mặc định gửi Host KHÔNG kèm ':port'."""
+    with main_with_lan() as entry:
+        s = entry._transport_security("0.0.0.0", ["google-cast.adrec.cloud"], [])
+    want(
+        "google-cast.adrec.cloud" in s.allowed_hosts,
+        f"thiếu dạng host trần: {s.allowed_hosts}",
+    )
+    want(
+        "google-cast.adrec.cloud:*" in s.allowed_hosts,
+        f"thiếu dạng host kèm cổng: {s.allowed_hosts}",
+    )
+
+
+@check("security_allows_https_origin_behind_proxy")
+def _():
+    with main_with_lan() as entry:
+        s = entry._transport_security("0.0.0.0", ["google-cast.adrec.cloud"], [])
+    want(
+        "https://google-cast.adrec.cloud" in s.allowed_origins,
+        f"proxy kết thúc TLS nên phải chấp nhận origin https: {s.allowed_origins}",
+    )
+    want("http://192.168.1.128:*" in s.allowed_origins, "thiếu origin LAN kèm cổng")
+
+
+@check("security_wildcard_bind_is_not_an_address")
+def _():
+    """0.0.0.0 là cách bind, không phải địa chỉ client gõ vào."""
+    with main_with_lan() as entry:
+        s = entry._transport_security("0.0.0.0", [], [])
+    want("0.0.0.0" not in s.allowed_hosts, f"không được đưa 0.0.0.0 vào allowlist: {s.allowed_hosts}")
+    with main_with_lan() as entry:
+        s2 = entry._transport_security("192.168.1.99", [], [])
+    want("192.168.1.99" in s2.allowed_hosts, "bind một địa chỉ cụ thể thì phải cho nó qua")
+
+
+@check("security_browser_origin_passes_through")
+def _():
+    """Origin của trang web (vd llama-server webui) phải qua được cả tầng SDK."""
+    with main_with_lan() as entry:
+        s = entry._transport_security("0.0.0.0", [], ["http://192.168.1.99:8383"])
+    want(
+        "http://192.168.1.99:8383" in s.allowed_origins,
+        f"thiếu origin trình duyệt: {s.allowed_origins}",
+    )
+
+
+@check("cors_exposes_session_header")
+def _():
+    """Không expose Mcp-Session-Id thì trình duyệt không đọc được session id và
+    chỉ báo 'Failed to fetch'."""
+    from googlecast_mcp import __main__ as entry
+
+    ran = {}
+
+    def fake_run(app, host=None, port=None, log_level=None):
+        ran["app"] = app
+
+    fake_uvicorn = types.SimpleNamespace(run=fake_run)
+    # uvicorn được import BÊN TRONG hàm, nên phải tráo ở sys.modules; khôi phục
+    # nguyên trạng ngay sau đó.
+    old = sys.modules.get("uvicorn")
+    sys.modules["uvicorn"] = fake_uvicorn
+    try:
+        entry._run_with_cors(["http://192.168.1.99:8383"])
+    finally:
+        if old is None:
+            sys.modules.pop("uvicorn", None)
+        else:
+            sys.modules["uvicorn"] = old
+
+    want("app" in ran, "phải dựng và chạy ứng dụng HTTP")
+    cors = [m for m in ran["app"].user_middleware if "CORS" in repr(m)]
+    want(cors, f"phải gắn CORSMiddleware: {ran['app'].user_middleware}")
+    kwargs = getattr(cors[0], "kwargs", {})
+    exposed = [h.lower() for h in kwargs.get("expose_headers", [])]
+    want("mcp-session-id" in exposed, f"phải expose Mcp-Session-Id, đang expose {exposed}")
+    want(
+        "OPTIONS" in kwargs.get("allow_methods", []),
+        f"preflight OPTIONS phải được cho phép: {kwargs.get('allow_methods')}",
+    )
+    want(
+        "http://192.168.1.99:8383" in kwargs.get("allow_origins", []),
+        f"origin phải đi vào middleware: {kwargs.get('allow_origins')}",
+    )
+
+
+@check("cli_defaults_are_safe")
+def _():
+    """Mặc định phải là stdio; mở cổng ra LAN phải là lựa chọn có ý thức."""
+    from googlecast_mcp import __main__ as entry
+
+    seen = {}
+
+    def fake_run(transport=None):
+        seen["transport"] = transport
+
+    def fake_ctx(bind_host, extra, origins):
+        seen["security"] = (bind_host, list(extra), list(origins))
+        return "settings-object"
+
+    fake_mcp = types.SimpleNamespace(
+        settings=types.SimpleNamespace(
+            host=None, port=None, transport_security=None,
+            json_response=None, stateless_http=None,
+        ),
+        run=fake_run,
+    )
+    stopped = []
+    fake_media = types.SimpleNamespace(
+        stop=lambda: stopped.append("media"), set_port=lambda p: seen.__setitem__("media_port", p)
+    )
+    fake_manager = types.SimpleNamespace(close=lambda: stopped.append("manager"))
+
+    # Tráo TRỌN BỘ những gì main() chạm tới, rồi khôi phục.
+    with swap(entry, "mcp", fake_mcp), swap(entry, "_media_server", fake_media), \
+            swap(entry, "_manager", fake_manager), swap(sys, "argv", ["googlecast-mcp"]):
+        entry.main()
+
+    want(seen.get("transport") == "stdio", f"transport mặc định phải là stdio: {seen}")
+    want(
+        fake_mcp.settings.host is None,
+        f"chạy stdio thì không được đụng tới cài đặt HTTP: host={fake_mcp.settings.host}",
+    )
+    want(sorted(stopped) == ["manager", "media"], f"thoát phải dọn tài nguyên: {stopped}")
+
+
+@check("cli_http_binds_loopback_by_default")
+def _():
+    from googlecast_mcp import __main__ as entry
+
+    seen = {}
+    fake_mcp = types.SimpleNamespace(
+        settings=types.SimpleNamespace(
+            host=None, port=None, transport_security=None,
+            json_response=None, stateless_http=None,
+        ),
+        run=lambda transport=None: seen.__setitem__("transport", transport),
+    )
+    fake_media = types.SimpleNamespace(stop=lambda: None, set_port=lambda p: seen.__setitem__("media_port", p))
+    fake_manager = types.SimpleNamespace(close=lambda: None)
+
+    argv = ["googlecast-mcp", "--transport", "http", "--media-port", "8766"]
+    with main_with_lan(), swap(entry, "mcp", fake_mcp), swap(entry, "_media_server", fake_media), \
+            swap(entry, "_manager", fake_manager), swap(sys, "argv", argv):
+        entry.main()
+
+    want(seen.get("transport") == "streamable-http", f"tên transport gửi cho SDK: {seen}")
+    want(
+        fake_mcp.settings.host == "127.0.0.1",
+        f"không nêu --host thì phải là loopback, được {fake_mcp.settings.host}",
+    )
+    want(fake_mcp.settings.port == 8000, f"cổng mặc định: {fake_mcp.settings.port}")
+    want(seen.get("media_port") == 8766, f"--media-port phải được ghim: {seen}")
+    want(
+        fake_mcp.settings.json_response is False and fake_mcp.settings.stateless_http is False,
+        "mặc định phải giữ SSE + có session id",
+    )
+    hosts = fake_mcp.settings.transport_security.allowed_hosts
+    want("192.168.1.128" in hosts, f"địa chỉ LAN phải tự động được cho qua: {hosts}")
+
+
+# ==========================================================================
+# Tầng --online: gọi dịch vụ edge-tts thật
+# ==========================================================================
+
+
+@check("online_renders_real_vietnamese_audio", tier="online")
+def _():
+    from googlecast_mcp import tts
+
+    with tmpdir() as d:
+        path = asyncio.run(tts.synthesize("Cơm đã chín rồi", cache_dir=d))
+        size = path.stat().st_size
+        head = path.read_bytes()[:2]
+        want(size > 2000, f"file audio thật phải có kích thước đáng kể, được {size} byte")
+        # Hoặc thẻ ID3, hoặc frame sync của MPEG: 11 bit 1 đầu tiên, tức là
+        # byte đầu 0xFF và ba bit cao của byte sau đều là 1 (ISO/IEC 11172-3
+        # §2.4.1.2 syncword). Không nới thành "có byte nào cũng được".
+        is_id3 = head == b"ID3"[:2]
+        is_frame = head[0] == 0xFF and (head[1] & 0xE0) == 0xE0
+        want(is_id3 or is_frame, f"không giống mp3: {head!r}")
+
+
+@check("online_serializes_a_burst", tier="online")
+def _():
+    """Sáu yêu cầu dồn cùng lúc: trước khi tuần tự hoá chỉ đạt 4/6."""
+    from googlecast_mcp import tts
+
+    async def burst(cache):
+        texts = [f"Câu thử số {i} của bài kiểm" for i in range(6)]
+        return await asyncio.gather(
+            *(tts.synthesize(t, cache_dir=cache) for t in texts), return_exceptions=True
+        )
+
+    with tmpdir() as d:
+        started = time.monotonic()
+        results = asyncio.run(burst(d))
+        elapsed = time.monotonic() - started
+        errors = [r for r in results if isinstance(r, BaseException)]
+        good = [r for r in results if not isinstance(r, BaseException) and r.stat().st_size > 0]
+        empty = [p.name for p in d.iterdir() if p.stat().st_size == 0]
+        print(f"    [online] 6 yêu cầu dồn: {len(good)}/6 đạt trong {elapsed:.1f}s")
+    want(not errors, f"không được có lỗi: {errors}")
+    want(len(good) == 6, f"phải đủ 6/6, được {len(good)}")
+    want(empty == [], f"không được đọng file 0 byte: {empty}")
+
+
+@check("online_two_event_loops", tier="online")
+def _():
+    """Hai asyncio.run() có tranh chấp trên dịch vụ thật."""
+    from googlecast_mcp import tts
+
+    async def pair(cache, salt):
+        return await asyncio.gather(
+            tts.synthesize(f"Vòng lặp {salt} câu một", cache_dir=cache),
+            tts.synthesize(f"Vòng lặp {salt} câu hai", cache_dir=cache),
+        )
+
+    with tmpdir() as d:
+        asyncio.run(pair(d, 1))
+        asyncio.run(pair(d, 2))
+        made = [p for p in d.iterdir() if p.stat().st_size > 0]
+    want(len(made) == 4, f"cả hai vòng lặp phải render được, chỉ có {len(made)}/4")
+
+
+# ==========================================================================
+# Tầng --hardware: PHÁT TIẾNG THẬT ra loa
+# ==========================================================================
+
+
+def _hardware_speaker():
+    name = os.environ.get("GOOGLECAST_MCP_TEST_SPEAKER")
+    if not name:
+        raise RuntimeError(
+            "đặt GOOGLECAST_MCP_TEST_SPEAKER=<tên loa> trước khi chạy --hardware"
+        )
+    return name
+
+
+@check("hardware_discovers_real_speakers", tier="hardware")
+def _():
+    from googlecast_mcp import server as srv
+
+    speakers = asyncio.run(srv.list_speakers())
+    names = [s["friendly_name"] for s in speakers]
+    want(speakers, "phải tìm ra ít nhất một loa thật trên mạng")
+    want(_hardware_speaker() in names, f"không thấy loa thử nghiệm trong {names}")
+    want(
+        all(s["cast_type"] in ("audio", "group") for s in speakers),
+        f"list_speakers lẫn thiết bị hình ảnh: {[(s['friendly_name'], s['cast_type']) for s in speakers]}",
+    )
+
+
+@check("hardware_says_on_real_speaker", tier="hardware")
+def _():
+    """Cast thật. Bằng chứng phải BỀN: content_id khớp URL và duration > 0 —
+    player_state đọc ngay lúc trả về có thể đã hết hạn (clip ngắn phát xong)."""
+    from googlecast_mcp import server as srv
+
+    name = _hardware_speaker()
+    out = asyncio.run(srv.say("Đây là bài kiểm tra tự động", name))
+    want(out["status"] == "ok", f"phải phát được: {out}")
+    want(out["results"][0]["status"] == "playing", f"kết quả từng loa: {out['results']}")
+    url = out["audio_url"]
+
+    # Bằng chứng bền, nhưng vẫn cần MỐC CHỜ: `content_id` xuất hiện ngay khi
+    # thiết bị nhận lệnh, còn `duration` chỉ có sau khi nó TẢI và đọc xong file.
+    # Đọc cả hai tại cùng một khoảnh khắc là đo `duration` quá sớm — đúng cái
+    # luật "mốc chờ + bằng chứng bền" cảnh báo, chỉ khác là hụt nửa sau.
+    media = {}
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        media = asyncio.run(srv.get_status(name))["media"]
+        if media.get("content_id") == url and (media.get("duration") or 0) > 0:
+            break
+        time.sleep(1.0)
+    want(
+        media.get("content_id") == url,
+        f"loa phải đang giữ đúng URL vừa cast.\ncó : {media.get('content_id')}\ncần: {url}",
+    )
+    want(
+        (media.get("duration") or 0) > 0,
+        f"thiết bị phải đọc được thời lượng trong 20s (tức là đã TẢI file): "
+        f"duration={media.get('duration')}",
+    )
+
+
+@check("hardware_all_never_doubles_a_speaker", tier="hardware")
+def _():
+    """'all' không được gửi tới cả nhóm lẫn thành viên: cùng một loa vật lý sẽ
+    nhận hai luồng, mà API vẫn báo 'playing' cho cả bốn. Dấu vết duy nhất phân
+    biệt được là host trùng nhau."""
+    from googlecast_mcp import server as srv
+
+    names, prompt = asyncio.run(srv._select_targets("all"))
+    want(prompt is None, "'all' phải là lựa chọn hợp lệ")
+    speakers = {s["friendly_name"]: s for s in asyncio.run(srv.list_speakers())}
+    chosen = [speakers[n] for n in names if n in speakers]
+    want(
+        all(s["cast_type"] != "group" for s in chosen),
+        f"'all' vẫn còn nhóm loa: {[(s['friendly_name'], s['cast_type']) for s in chosen]}",
+    )
+    # So TẬP kỳ vọng tường minh, không so kích thước: `len(x) == len(set(x))`
+    # vẫn xanh khi `chosen` co lại còn một phần tử (hoặc rỗng), tức là xanh
+    # đúng vào lúc lựa chọn hỏng nặng nhất. Đây là dạng test giả v1.9 nêu tên.
+    want(len(chosen) >= 2, f"phải chọn được ít nhất 2 loa để phép kiểm có nghĩa: {names}")
+    want(
+        {s["friendly_name"] for s in chosen}
+        == {s["friendly_name"] for s in speakers.values() if s["cast_type"] != "group"},
+        f"'all' phải đúng bằng tập loa không-phải-nhóm: {sorted(s['friendly_name'] for s in chosen)}",
+    )
+    hosts = [s["host"] for s in chosen]
+    want(
+        sorted(hosts) == sorted(set(hosts)),
+        f"hai mục trỏ cùng một máy loa: {hosts}",
+    )
+
+
+@check("hardware_volume_round_trip", tier="hardware")
+def _():
+    from googlecast_mcp import server as srv
+
+    name = _hardware_speaker()
+    before = asyncio.run(srv.get_status(name))["app"]["volume_level"]
+    try:
+        asyncio.run(srv.set_volume(name, 0.25))
+        time.sleep(1.5)
+        got = asyncio.run(srv.get_status(name))["app"]["volume_level"]
+        want(abs(got - 0.25) < 0.05, f"âm lượng phải đổi thật: {got}")
+    finally:
+        if before is not None:
+            asyncio.run(srv.set_volume(name, before))
 
 
 # ==========================================================================
@@ -1320,89 +1438,110 @@ def _():
 # ==========================================================================
 
 
-def run_checks(tiers: set[str], as_json: bool) -> int:
-    registered = [c for c in CHECKS if c[1] in tiers]
+def run(tiers, only, quiet=False, as_json=False):
+    registered = [
+        (i, t, f) for (i, t, f) in REGISTRY if t in tiers and (not only or any(o in i for o in only))
+    ]
     total = len(registered)
-    results: list[dict] = []
     ran = 0
+    passed, failed, errored = [], [], []
 
-    for check_id, tier, fn in registered:
+    for item_id, tier, fn in registered:
         started = time.monotonic()
+        outcome = "ERROR"
+        detail = ""
         try:
-            out = fn()
-            if inspect.isawaitable(out):
-                asyncio.run(out)
-            status, detail = "PASS", ""
+            fn()
+            outcome = "PASS"
         except AssertionError as exc:
-            status, detail = "FAIL", str(exc) or "khẳng định sai"
-        except Exception:
-            # Lỗi hạ tầng là ERROR, không được nuốt thành PASS.
-            status, detail = "ERROR", traceback.format_exc(limit=3).strip()
-        ran += 1
-        results.append(
-            {
-                "id": check_id,
-                "tier": tier,
-                "status": status,
-                "detail": detail,
-                "seconds": round(time.monotonic() - started, 3),
-            }
-        )
-        if not as_json:
-            mark = {"PASS": "  ok  ", " ": ""}.get(status, f" {status} ")
-            print(f"{mark:>7} {check_id}")
-            if detail and status != "PASS":
-                for line in detail.splitlines():
-                    print(f"         {line}")
-
-    failed = [r for r in results if r["status"] != "PASS"]
-    complete = ran == total
-    ok = complete and not failed
+            outcome = "FAIL"
+            detail = str(exc)
+        except BaseException as exc:  # noqa: BLE001 - hạ tầng hỏng là ERROR, không nuốt
+            outcome = "ERROR"
+            detail = f"{type(exc).__name__}: {exc}\n" + textwrap_indent(
+                traceback.format_exc(), "        "
+            )
+        finally:
+            # Đếm ĐÃ CHẠY ở đây, trước khi biết xanh hay đỏ.
+            ran += 1
+        took = time.monotonic() - started
+        {"PASS": passed, "FAIL": failed, "ERROR": errored}[outcome].append(item_id)
+        if not quiet or outcome != "PASS":
+            print(f"  [{outcome:5}] {item_id} ({tier}, {took:.2f}s)")
+            if detail:
+                print(f"        {detail}")
 
     if as_json:
         print(
-            json.dumps(
+            "JSON " + json.dumps(
                 {
-                    "registered": total,
                     "ran": ran,
-                    "passed": len(results) - len(failed),
-                    "complete": complete,
-                    "ok": ok,
-                    "results": results,
+                    "total": total,
+                    "pass": passed,
+                    "fail": failed,
+                    "error": errored,
                 },
                 ensure_ascii=False,
             )
         )
-    else:
-        print()
-        print(f"đã chạy {ran}/{total} mục đăng ký")
-        if not complete:
-            print("FAIL TOÀN CỤC: chạy thiếu mục — sập giữa chừng không phải là ĐẠT")
-        print(f"xanh {len(results) - len(failed)}/{ran}")
-        for r in failed:
-            print(f"  hỏng: {r['id']} ({r['status']})")
-        print("KẾT QUẢ: ĐẠT" if ok else "KẾT QUẢ: KHÔNG ĐẠT")
+    print()
+    print(f"đã chạy {ran}/{total} mục đăng ký")
+    print(f"  xanh {len(passed)} · đỏ {len(failed)} · lỗi hạ tầng {len(errored)}")
+    if failed:
+        print(f"  đỏ : {', '.join(failed)}")
+    if errored:
+        print(f"  lỗi: {', '.join(errored)}")
 
-    return 0 if ok else 1
+    if total == 0:
+        print("KHÔNG ĐẠT — không mục nào khớp bộ lọc (khớp 0 case không phải là đạt)")
+        return 2
+    if ran < total:
+        print(f"KHÔNG ĐẠT — chỉ chạy {ran}/{total} mục; bài kiểm đã sập giữa chừng")
+        return 2
+    if failed or errored:
+        print("KHÔNG ĐẠT")
+        return 1
+    print("ĐẠT")
+    return 0
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--online", action="store_true", help="thêm tầng gọi edge-tts thật")
-    parser.add_argument(
+def textwrap_indent(text, prefix):
+    return "".join(prefix + line for line in text.splitlines(keepends=True))
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Bài kiểm googlecast-mcp")
+    ap.add_argument("--online", action="store_true", help="thêm tầng gọi edge-tts thật")
+    ap.add_argument(
         "--hardware",
         action="store_true",
-        help="thêm tầng cast thật: PHÁT RA TIẾNG. Xin phép trước khi dùng.",
+        help="thêm tầng CAST THẬT — phát tiếng ra loa; phải xin phép trước",
     )
-    parser.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    args = parser.parse_args()
+    ap.add_argument("--only", default="", help="chỉ chạy các mục có id chứa chuỗi này (cách phẩy)")
+    ap.add_argument("--list", action="store_true", help="liệt kê id các mục rồi thoát")
+    ap.add_argument("-q", "--quiet", action="store_true", help="chỉ in mục không xanh")
+    ap.add_argument("--json", action="store_true", help="in thêm một dòng JSON tổng hợp")
+    args = ap.parse_args()
+
+    if args.list:
+        for item_id, tier, _fn in REGISTRY:
+            print(f"{tier:8} {item_id}")
+        return 0
 
     tiers = {"offline"}
     if args.online:
         tiers.add("online")
     if args.hardware:
         tiers.add("hardware")
-    return run_checks(tiers, args.json)
+        print("!! tầng --hardware sẽ PHÁT TIẾNG THẬT ra loa.")
+        print(f"!! loa thử nghiệm: {os.environ.get('GOOGLECAST_MCP_TEST_SPEAKER', '(chưa đặt)')}")
+
+    only = [s.strip() for s in args.only.split(",") if s.strip()]
+    if only:
+        print(f"(lượt RÚT GỌN: chỉ chạy mục khớp {only} — không phải lượt đầy đủ)")
+    print(f"tầng: {', '.join(sorted(tiers))}")
+    print()
+    return run(tiers, only, args.quiet, args.json)
 
 
 if __name__ == "__main__":

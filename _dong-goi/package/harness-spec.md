@@ -1,120 +1,101 @@
-# Harness spec — googlecast-mcp
-
-Loại harness: **vận hành** (máy móc, kết quả xác định). Không có thành phần
-sinh nội dung bằng AI, nên trọng số dồn vào Tool và Execution; Eval nặng vừa
-phải và chủ yếu đo *hành vi quan sát được*, không đo chất lượng chủ quan.
-
-| Lớp | Trọng số | Vì sao |
-|---|---|---|
-| Context | thấp | không có prompt engineering; mô tả tool chính là context |
-| Tool | **cao** | 13 tool là toàn bộ bề mặt product |
-| Execution | **cao** | mạng, mDNS, thiết bị vật lý — chỗ mọi thứ hỏng |
-| Eval | cao | phần lớn hành vi quan trọng không thấy được qua kết quả API |
-| Feedback | trung bình | vòng phản hồi qua tai người, không tự động hoá hết được |
-
+---
+product: googlecast-mcp
+layer: output
+product_repo: https://github.com/devAdrec/googlecast-mcp
+package: https://github.com/devAdrec/googlecast-mcp
+harness_kind: vận-hành
+registry: "[[packages/googlecast-mcp]]"
 ---
 
-## 1. Context
+# Harness — năm lớp
 
-**Thứ duy nhất LLM đọc được là docstring của tool.** Không có system prompt,
-không có ví dụ few-shot.
+googlecast-mcp là **harness vận hành**: cùng đầu vào cho ra cùng kết quả, nên
+eval chấm **pass/fail** chứ không chấm chất lượng. Trọng số nghiêng về lớp Tool
+và lớp Execution — chỗ mọi ngõ cụt thật đã xảy ra.
 
-Hai điều docstring phải tải nổi:
+## 1. Context — thứ mô hình được thấy
 
-1. `say` **không phát gì** khi thiếu loa đích, và cái nó trả về là *nguyên
-   liệu để hỏi lại người dùng*, không phải lỗi. Nếu LLM hiểu nhầm là lỗi, nó
-   sẽ thử lại hoặc bịa ra một tên loa.
-2. `target` nhận **bốn dạng**: một tên, nhiều tên cách phẩy, `all`, `tất cả`.
-
-Chính vì thế thông điệp trả về của `_select_targets` (`server.py`) viết dài và
-liệt kê sẵn tên loa: nó là *câu lệnh gửi cho LLM*, không phải thông báo lỗi
-cho người.
-
-Kiểm: `server.tools.exact_set` (đủ 13 tool, so TẬP tên tường minh),
-`server.say.without_a_speaker_choice_plays_nothing` (nội dung thông điệp).
-
-## 2. Tool
-
-13 tool, chia ba nhóm: nói (`say`), khám phá (`discover_devices`,
-`list_speakers`, `list_devices`), điều khiển (9 tool còn lại).
-
-Ràng buộc thiết kế:
-
-| Ràng buộc | Kiểm bởi |
+| Nguồn | Nội dung |
 |---|---|
-| Mặc định an toàn: thiếu loa đích thì không có tác dụng phụ nào, **kể cả không render TTS** | `server.say.without_a_speaker_choice_plays_nothing` |
-| Phân biệt "chưa chọn loa" với "mạng không có loa nào" | `server.say.no_speakers_on_network` |
-| Một phần tử hỏng được cô lập, không đánh sập cả lệnh | `server.say.broken_element_does_not_sink_the_rest` |
-| Hỏng hết thì phải báo `failed`, không được báo `ok` rỗng | `server.say.all_broken_reports_failed` |
-| `all` bỏ nhóm loa | `server.say.all_excludes_speaker_groups` |
-| Tham số ngoài khoảng bị kẹp, không ném lỗi | `cast.set_volume.clamps_range` |
+| Danh mục 13 tool | tên + mô tả + lược đồ tham số |
+| Mô tả tool | mang cả luật hành vi: *"Omit to be asked which speaker to use"* |
+| `list_speakers` | danh sách loa thật, đã lọc thiết bị hình ảnh |
+| `needs_speaker_selection` | trạng thái + danh sách loa + câu hướng dẫn hỏi lại |
 
-## 3. Execution
+**Điểm quan trọng nhất của lớp này:** khi thiếu `target`, sản phẩm KHÔNG cố tự
+đoán. Nó trả về **ngữ cảnh để mô hình đi hỏi người**. Mô tả tool là chỗ luật đó
+được truyền đi — mất mô tả là mất luật, nên eval có mục
+`tool_descriptions_are_present`.
 
-Ba mặt phẳng thực thi tách rời, hỏng độc lập nhau:
+Trọng số: **trung bình**. Không có mô tả thì LLM chọn sai tool, nhưng sai lệch
+không âm thầm.
 
-```
-MCP (8765) ── client gọi vào
-mDNS/8009  ── server nói chuyện với thiết bị Cast
-HTTP (8766) ── thiết bị Cast gọi NGƯỢC về server để tải audio
-```
+## 2. Tool — mặt tiếp xúc
 
-Mặt phẳng thứ ba là mặt phẳng người ta quên. Nó hỏng thì cast vẫn "thành
-công" và loa vẫn im lặng.
+13 tool, chia ba nhóm:
 
-| Điểm hỏng | Xử lý trong mã | Kiểm bởi |
+- **Dò tìm**: `discover_devices`, `list_devices`, `list_speakers`
+- **Nói**: `say` (thứ duy nhất chỉ product này mới có)
+- **Điều khiển Cast chung**: `get_status`, `play_media`, `play`, `pause`,
+  `stop`, `seek`, `set_volume`, `set_muted`, `quit_app`
+
+Hợp đồng bắt buộc:
+
+| Hợp đồng | Vì sao | Mục eval |
 |---|---|---|
-| mDNS sót thiết bị đã lưu | `_connect_saved()` trước khi quét lại | `cast.resolve.saved_address_tried_before_rescan` |
-| Thiết bị treo (TCP 8009 refuse) | timeout + lỗi riêng cho phần tử đó | `server.say.broken_element_does_not_sink_the_rest` |
-| Dịch vụ TTS từ chối kết nối đồng thời | tuần tự hoá + 3 lần thử giãn cách | `tts.synthesize.retries_then_succeeds`, `tts.fanout.*` |
-| Nhiều vòng lặp asyncio trong một tiến trình | một khoá cho mỗi vòng lặp | `tts.lock.is_per_event_loop_under_contention` |
-| Render hỏng để lại file 0 byte | `unlink` trước mỗi lần thử + kiểm kích thước | `tts.synthesize.no_zero_byte_file_left_after_failure` |
-| Client ở xa bị chặn bởi bảo vệ DNS-rebinding | nới allowlist, không tắt bảo vệ | `entry.security.*` |
-| Client trình duyệt bị chặn bởi CORS | `CORSMiddleware` + `expose_headers` | `entry.security.browser_origin_passes_through` |
+| đủ đúng 13 tool | client đếm tool để biết đã nối đúng server | `server_exposes_thirteen_tools` |
+| `say` thiếu `target` → không phát gì | tác dụng phụ vật lý, không hoàn tác | `say_without_choice_plays_nothing` |
+| `all` bỏ nhóm loa | tránh chồng luồng | `select_all_excludes_groups` |
+| một loa hỏng không kéo đổ lượt phát | mạng gia đình luôn có thiết bị ngủ | `say_isolates_one_broken_speaker` |
+| âm lượng bị kẹp 0.0–1.0 | tránh gửi giá trị vô lý xuống phần cứng | `manager_volume_is_clamped` |
 
-## 4. Eval
+Trọng số: **cao**.
 
-Chi tiết đầy đủ ở `eval/README.md`. Ở đây chỉ ghi hình dạng.
+## 3. Execution — thứ thật sự chạy
 
-**Ba tầng tác dụng phụ**, tăng dần, tầng nặng phải opt-in:
+Bốn ràng buộc thời gian chạy, mỗi cái đến từ một lần vấp thật:
 
-| Tầng | Cờ | Chạm tới | Xin phép? |
-|---|---|---|---|
-| offline | (mặc định) | không gì cả | không |
-| online | `--online` | edge-tts thật (internet) | không |
-| hardware | `--hardware` | **loa thật, phát ra tiếng** | **có, mỗi lần** |
+1. **Tuần tự hoá render TTS, khoá theo TỪNG vòng lặp.** Dịch vụ từ chối kết nối
+   đồng thời; và một khoá mức module sẽ tự gắn vào vòng lặp đầu tiên có tranh
+   chấp rồi từ chối mọi vòng lặp sau.
+2. **Server phải bind `0.0.0.0` nhưng quảng bá `lan_ip()`.** Hai địa chỉ khác
+   nhau; lẫn lộn là loa không tải được file.
+3. **Bảo vệ DNS-rebinding phải nới cho cả host trần lẫn origin https.** Proxy ở
+   cổng mặc định gửi Host không kèm `:port`.
+4. **CORS phải expose `Mcp-Session-Id`.** Không expose thì trình duyệt không
+   duy trì được phiên và chỉ báo `Failed to fetch`.
 
-Bài kiểm mà không ai dám chạy thì bằng không có — nên tầng mặc định phải chạy
-được ở bất cứ đâu, bất cứ lúc nào, không cần mạng, không làm phiền ai.
+Ranh giới tác dụng phụ:
 
-**Bốn luật viết bài kiểm** (thi hành trong mã, không chỉ là lời khuyên):
+| Tầng | Chạm tới | Mặc định |
+|---|---|---|
+| offline | chỉ thư mục tạm | **bật** |
+| `--online` | dịch vụ edge-tts thật | tắt |
+| `--hardware` | **phát tiếng thật ra loa** | tắt, **phải xin phép** |
 
-1. **Đếm đủ trước khi đếm xanh.** Báo cáo in `đã chạy X/Y mục đăng ký`; X<Y là
-   FAIL toàn cục. Áp cho **cả** `reverse-check.py`: khớp 0 trường hợp không
-   được báo ĐẠT.
-2. **Mọi mục phải gọi vào mã sản phẩm** và nằm trong ≥1 danh sách kỳ-vọng-đỏ.
-   `reverse-check.py` tự kiểm điều này và báo mục không được phủ.
-3. **So TẬP kỳ vọng tường minh**, không so kích thước. `server.tools.exact_set`
-   so tập tên, không so "13".
-4. **Bằng chứng bền theo thời gian VÀ phạm vi.** Khẳng định phải sống trong
-   vòng đời của fixture nó tham chiếu.
+Trọng số: **cao nhất**.
 
-## 5. Feedback
+## 4. Eval — cách chấm
 
-Vòng phản hồi ngắn nhất trong product này **không tự động hoá được**: phải có
-người nghe.
+Chi tiết và bằng chứng: [eval/README.md](eval/README.md).
 
-| Tín hiệu | Máy đọc được? |
-|---|---|
-| Tool trả `ok` | có — nhưng **không đủ**: cast "thành công" mà im lặng là chuyện thường |
-| `content_id` khớp URL vừa cast + `duration > 0` | có — đây là bằng chứng bền nhất mà máy lấy được |
-| `player_state == PLAYING` | **không tin được**: đo được `say()` mất 5.4s trong khi clip chỉ 2.26s, tức lúc trả về loa đã phát xong |
-| Nghe có tự nhiên không | **không** — phải người nghe |
-| Có chồng luồng lên một loa vật lý không | **không** — kết quả API không phân biệt; dấu vết duy nhất là nhóm và thành viên trùng `host` |
+- 57 mục offline · 3 mục `--online` · 4 mục `--hardware`.
+- Chấm nhị phân. "đã chạy X/Y mục đăng ký"; X < Y là **KHÔNG ĐẠT toàn cục**.
+- Đã kiểm ngược bằng **60 lỗi gieo**, phủ **57/57** mục offline, có **3 đối
+  chứng kỳ-vọng-xanh**.
 
-Hai dòng cuối là lý do tầng `--hardware` tồn tại và lý do nó không thay được
-tai người.
+## 5. Feedback — cái gì quay lại đâu
 
-**Tín hiệu từ phía người dùng cũng là dữ liệu.** Câu "vẫn báo lổi" lặp lại lần
-thứ hai không có nghĩa là sửa chưa đủ sâu — nó thường có nghĩa là **bản sửa
-chưa được nạp**. Đó là lý do `service.sh status` in `/proc/<MainPID>/cmdline`.
+| Tín hiệu | Ai nhận | Đi tới đâu |
+|---|---|---|
+| `needs_speaker_selection` | LLM | đặt câu hỏi cho người dùng |
+| lỗi từng loa trong `results` | LLM | báo đúng loa nào hỏng |
+| `DeviceNotFoundError` kèm danh sách thiết bị đã biết | LLM và người | gõ đúng tên |
+| `service.sh status` in `/proc/<pid>/cmdline` | người vận hành | biết bản đang chạy có phải bản vừa sửa không |
+| eval đỏ | người bảo trì | id mục chỉ thẳng vào hợp đồng bị vi phạm |
+
+Vòng phản hồi đắt nhất đã gặp là vòng **thiếu**: sửa xong ba lần mà tiến trình
+cũ vẫn sống ba ngày, vì không có gì nói cho ai biết bản đang chạy là bản nào.
+Dòng `cmdline` trong `status` sinh ra từ đó.
+
+Trọng số: **trung bình–cao** với người vận hành, **cao** với LLM.
