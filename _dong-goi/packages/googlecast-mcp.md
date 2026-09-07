@@ -7,12 +7,13 @@ package_kind: mcp
 package_status: CÓ
 package_root: /storage/apps/mcp/googlecast_mcp/_dong-goi
 dod_test: "người lạ, môi trường sạch, chỉ đọc package/README — GỌI ĐƯỢC TOOL"
-dod_verified: 2026-08-28
-eval_last: 2026-08-28
+dod_verified: 2026-09-07
+dod_transports: "stdio ĐẠT · HTTP ĐẠT (chứng minh RIÊNG từng transport, 2026-09-07)"
+eval_last: 2026-09-07
 eval_offline: "57/57 ĐẠT"
-eval_online: "3/3 ĐẠT"
-eval_hardware: "64/64 ĐẠT (2026-08-28, sau khi sửa 2 lỗi của chính bài kiểm)"
-reverse_check: "60/60 lỗi gieo ĐẠT, phủ 57/57 mục offline, 3 đối chứng xanh, 56s"
+eval_online: "60/60 ĐẠT (57 offline + 3 online), 2026-09-07"
+eval_hardware: "64/64 ĐẠT (2026-09-07, xin phép rồi chạy; không mục nào đỏ)"
+reverse_check: "60/60 lỗi gieo ĐẠT, phủ 57/57 mục offline, 3 đối chứng xanh, 57s (lượt ĐẦY ĐỦ 2026-09-07)"
 transmission_level: L2
 method_note_triage: "7 lỗ hổng — 6 sửa ngay, 1 chấp nhận có lý do, 0 ngoài phạm vi"
 method_note: "[[method-googlecast-mcp]]"
@@ -60,9 +61,14 @@ Tài liệu **đang sống** của sản phẩm nằm trong repo: `README.md`,
 
 ## Trạng thái
 
-- **`package: CÓ`.** DoD dạng MCP (*gọi được tool*) đã chạy lại ngày 2026-08-28
-  trên bản clone sạch, cả stdio lẫn HTTP, đều ra 13 tool; `list_speakers` trả
-  loa thật.
+- **`package: CÓ`.** DoD dạng MCP (*gọi được tool*) chứng minh **RIÊNG cho từng
+  transport** ngày **2026-09-07**: stdio → 13 tool + `tools/call list_speakers`
+  trả loa thật; HTTP (cổng rỗi 8797) → 13 tool + `tools/call` trả loa thật +
+  `Host` ngoài allowlist trả 421. Bước "clone từ số không" lấy bằng chứng lượt
+  2026-08-28 trên `/tmp/dod-clone`.
+- **Quan sát môi trường 2026-09-07:** service `active`, `cmdline` khớp tài liệu,
+  nhưng `ss -ltn` chỉ thấy `0.0.0.0:8765` — **8766 mở lười**, quét cổng sau khi
+  máy khởi động sẽ bỏ sót nó.
 - **Điểm hở đã biết, chưa đóng:** không xác thực ở tầng ứng dụng, trong khi tên
   miền phân giải công khai · cổng audio 8766 không xác thực, phục vụ nguyên thư
   mục cache · chặn IP nginx đã đồng ý bật nhưng hai dòng vẫn đang comment. Chi

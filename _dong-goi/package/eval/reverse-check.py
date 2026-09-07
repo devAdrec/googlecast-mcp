@@ -663,6 +663,15 @@ def main():
         started = time.monotonic()
         verdict, detail = "ERROR", ""
         try:
+            # run_items rỗng = lỗi CẤU HÌNH, không phải kết quả. Một ca không
+            # khai mục nào sẽ chạy eval với bộ lọc rỗng và "đạt" mà chẳng
+            # kiểm gì — nhất là các ĐỐI CHỨNG, vốn không có expect_red để
+            # suy ra. Chặn ngay tại đây.
+            if not case["run_items"]:
+                raise RuntimeError(
+                    "run_items rỗng — ca này không khai mục eval nào sẽ chạy "
+                    "(đối chứng bắt buộc khai tường minh)"
+                )
             with tempfile.TemporaryDirectory(prefix="gcmcp-seed-") as tmp:
                 work = Path(tmp) / "src"
                 # Gieo vào BẢN SAO. Cây sản phẩm không bao giờ bị chạm tới.

@@ -2,9 +2,91 @@
 product: googlecast-mcp
 layer: feedback
 product_repo: https://github.com/devAdrec/googlecast-mcp
-spec_version: "dong-goi-solo-agent v1.9 (sinh từ vault dong-goi-product v1.9)"
-session: 2026-08-28
+spec_version: "dong-goi-solo-agent v1.10 (sinh từ vault dong-goi-product v1.10)"
+session: 2026-09-07 (phiên trước: 2026-08-28, spec v1.9)
 registry: "[[packages/googlecast-mcp]]"
+---
+
+# Phản hồi từ phiên v1.10 — 2026-09-07
+
+## Trước hết: đề xuất của phiên v1.9 đã được vá vào bản chuẩn
+
+Cả ba đề xuất lớn của phiên trước nay là luật trong v1.10 — thang **phép đo
+không hoàn tác được** (Đ7), **treo ở dọn dẹp = ĐỎ** (Đ1), **lỗi gieo khớp đúng
+một lần** (Đ2). Vòng phản hồi *ghi-thành-file → vá bản chuẩn → tái sinh bản
+solo* đã chạy trọn một vòng và có kết quả. Đây là bằng chứng cho chính luật
+"phản hồi phải ghi thành FILE": danh sách này sống sót được qua **việc người
+dùng xoá sạch `_dong-goi/`**, vì nó nằm trong git chứ không nằm trong chat.
+
+## Luật v1.10 đã trả công ngay trong phiên này
+
+1. **`run_items` khai tường minh** (Đ3) — chốt chặn "rỗng = lỗi cấu hình" được
+   thêm vào `reverse-check.py` trong phiên này và đã kiểm bằng cách **làm nó
+   nổ**: ca thử `probe_empty_run_items` → ERROR chặn lượt. Không có luật này,
+   một đối chứng quên khai mục sẽ xanh vì chẳng chạy gì.
+2. **DoD từng transport** (Đ9) — ép tách stdio và HTTP thành hai dòng bằng
+   chứng riêng. Nếu gộp, phiên này đã có thể chỉ chạy HTTP rồi kết luận cho cả
+   hai; mà hai đường chỉ dùng chung lớp tool.
+3. **Quan sát môi trường triển khai là dữ liệu** (Đ8) — luật này biến một thứ
+   trước đây bị bỏ qua thành bằng chứng: `ss -ltn` trên máy thật cho thấy
+   service `active` mà **8766 không hề mở**. Đó là tái hiện sống của "cổng mở
+   lười", và nó đổi kết luận về bề mặt tấn công.
+
+## Đề xuất mới cho bản chuẩn
+
+### Đ-A. Thêm "rà soát trùng lặp" thành bước con của B3
+
+**Vấn đề quan sát được.** Luật "mỗi ý nói MỘT lần" đã có trong B3, nhưng nó là
+một câu dặn, không phải một bước có việc làm. Phiên này suýt vi phạm: khi thêm
+thang phép-đo-không-hoàn-tác vào Bước 3 của note, hoá ra Bước 5 **đã có sẵn**
+đúng nội dung đó từ phiên trước — chỉ phát hiện nhờ tình cờ `grep`. Rủi ro này
+tăng theo mỗi phiên đóng gói lại, vì người đóng gói sau không nhớ hết note cũ.
+
+**Đề xuất chữ.** Thêm vào B3:
+
+> Trước khi thêm một mục mới vào note đã tồn tại, `grep` note bằng 2–3 từ khoá
+> của ý định thêm. Nếu ý đó đã có chỗ khác: **trỏ sang chỗ cũ**, đừng viết lại.
+> Note đóng gói lại nhiều lần thì trùng lặp là chế độ hỏng mặc định, không phải
+> tai nạn hiếm.
+
+### Đ-B. Nói rõ trong B6 rằng DoD có thể "kế thừa từng dòng"
+
+**Vấn đề.** Luật hiện có phân bốn trạng thái cho **từng bước** DoD, nhưng không
+nói gì về **tuổi** của bằng chứng. Phiên này lượt DoD chạy trên **cây làm việc**
+chứ không phải bản clone mới: các dòng "gọi được tool" là mới hôm nay, còn dòng
+"clone từ số không" là bằng chứng của 10 ngày trước. Nếu không nói ra, bảng DoD
+trông như thể toàn bộ đã chạy lại.
+
+**Đề xuất chữ.** Thêm vào B6:
+
+> Mỗi dòng bằng chứng DoD phải mang **ngày chạy**. Dòng kế thừa từ lượt trước
+> phải nêu **điều kiện còn hiệu lực** (vd "còn đúng chừng nào `git status` trên
+> cây sản phẩm còn sạch"). Bảng DoD không ghi ngày là bảng ngầm nói "tất cả đều
+> mới".
+
+### Đ-C. Đặt tên cho "rà soát thiết kế là thứ thay thế TỆ HƠN"
+
+**Vấn đề.** v1.10 yêu cầu vùng-ngoài-phủ phải *rà-soát-thiết-kế + liệt kê CHƯA
+PHỦ*. Đúng, nhưng luật im lặng về sức mạnh của phép thay thế đó — và sự im lặng
+dễ đọc thành "rà soát xong là yên tâm". Dữ liệu của chính product này nói ngược
+lại: bảng rà soát thiết kế cho tầng `--hardware` đã **bỏ sót đúng hai lỗi** mà
+lượt chạy thật sau đó lộ ra, và cả hai đều vi phạm luật đã viết thành chữ.
+
+**Đề xuất chữ.** Thêm một câu vào chỗ nói về vùng ngoài phủ:
+
+> Rà soát thiết kế là **thứ thay thế tệ hơn** cho việc chạy thật, được dùng vì
+> chi phí chứ không vì nó đủ. Ghi kèm câu đó vào mục CHƯA PHỦ, để lần sau không
+> ai đọc bảng rà soát thành bảo đảm.
+
+## Không đề xuất
+
+- **Không** đề xuất nới luật "đếm đủ trước khi đếm xanh", và **không** đề xuất
+  bỏ tầng `--hardware` — lý do đã ghi ở phần phản hồi phiên v1.9 bên dưới, và
+  dữ liệu phiên này chỉ củng cố thêm: **6 trong 7** lượt hardware lộ ra lỗi của
+  chính bài kiểm.
+- **Không** đề xuất tự động hoá bước xin phép chạy `--hardware`. Cái giá của
+  việc phải hỏi chính là thứ giữ cho số lần đo thật không trôi.
+
 ---
 
 # Phản hồi quy trình đóng gói — từ phiên v1.9
@@ -17,7 +99,7 @@ hơi theo phiên — chính luật này ở v1.9 đã cứu được danh sách 
 
 ---
 
-## Cái gì ở v1.9 đã chứng minh giá trị trong phiên này
+## Cái gì ở v1.9 đã chứng minh giá trị trong phiên 2026-08-28
 
 Không phải điều nào cũng cần sửa. Ghi lại phần đã trả công, để không ai gỡ nhầm.
 

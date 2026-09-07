@@ -16,6 +16,10 @@ Ghi lại **cách nghĩ**, không phải cách dùng. Muốn cài và chạy s�
 [[package/README|package/README.md]]. Muốn dựng lại đúng sản phẩm này thì đọc
 [[reproduce-googlecast-mcp]].
 
+*Đọc ngoài vault:* mọi liên kết dạng ngoặc vuông kép là **đường dẫn tương đối**
+tính từ thư mục chứa note này — `package/eval/README` chính là
+`_dong-goi/package/eval/README.md`.
+
 ---
 
 ## Bài học 30 giây
@@ -97,6 +101,29 @@ có workinig speaker xác minh luôn tts -> HTTP -> cast chạy thật
 chuỗi trên thiết bị thật*. Người dùng đang chọn cách nghiệm thu, không phải
 chọn công nghệ.
 
+**Prompt để bạn gõ lại** (*tái dựng* — người dùng không viết prompt cho việc
+phân loại này, nó do phía xây tự đặt ra):
+
+```
+Liệt kê mọi thành phần bên ngoài mà <sản phẩm> phải chọn. Với TỪNG cái, phân
+loại nó là "cảm nhận được" (chất lượng chỉ con người nghe/nhìn mới chấm được)
+hay "xương sống" (chỉ cần chạy đúng), và nói rõ tiêu chí chấm của loại đó.
+- Loại XƯƠNG SỐNG: chọn thẳng theo mức bảo trì và độ phủ giao thức. Đừng bắt
+  tôi so sánh; chỉ báo cho tôi lựa chọn và lý do một dòng.
+- Loại CẢM NHẬN ĐƯỢC: tự loại hết bằng tiêu chí kỹ thuật trước (giá, khoá API,
+  chi phí cài đặt, giấy phép), rồi dựng thử tối đa 4 phương án còn lại thành
+  mẫu để tôi nghe/nhìn. Mục tiêu: tôi chỉ phải trả lời ĐÚNG MỘT câu.
+```
+
+**Vùng xám: khi thứ cảm nhận được lại nằm sau một hành động không hoàn tác.**
+Với loa thì nghe thử rẻ. Với máy in nhãn thì "bố cục đẹp không" cũng là cảm
+nhận được, nhưng mỗi lần chấm là **một tờ giấy thật** — phân loại của Bước 2 đẩy
+thẳng vào ràng buộc của [Bước 3](#bước-3--thiết-kế-cho-tác-dụng-phụ-không-hoàn-tác-được).
+Cách gỡ: **tách phần chấm được ra khỏi phần phát ra đời** — dựng bản xem trước
+(ảnh, file PDF, sóng âm) để người chấm trên đó, và chỉ dùng thiết bị thật ở
+**lượt xác nhận cuối**. Nếu không tách được thì đó là tín hiệu phải giảm số
+phương án đem so xuống, chứ không phải tín hiệu bỏ luôn việc so.
+
 **Quyết định chốt.** edge-tts (`vi-VN-HoaiMyNeural` nữ, `vi-VN-NamMinhNeural`
 nam): tự nhiên nhất, miễn phí, không cần khoá API. Ba phương án bị loại vì —
 gTTS giọng máy móc, Google Cloud TTS cần khoá và tính phí, Piper chạy offline
@@ -137,6 +164,9 @@ client thật, hãy nói rõ đó là phán đoán.
 danh sách loa và một câu hướng dẫn LLM hỏi lại. **Không tổng hợp giọng, không
 phát gì cả.** Đây là hợp đồng quan trọng nhất của sản phẩm, nên nó có mục eval
 riêng: `say_without_choice_plays_nothing`.
+
+*Nguyên tắc này quay lại cắn chính việc KIỂM THỬ — vì kiểm thử cũng là hành
+động không hoàn tác được. Cách gỡ nằm ở [Bước 5](#bước-5--đo-trước-khi-mô-tả-nguyên-nhân).*
 
 🔧 *Một cái bẫy trong chính lời giải:* `"tất cả"` gửi tới **cả nhóm loa lẫn
 thành viên nhóm** thì một loa vật lý nhận hai luồng. Cái khó là **API không hề
@@ -238,9 +268,14 @@ thứ tự:
    khoá TTS đều phân định được ở tầng này; thiết bị thật không cần tham gia.
 2. **Chỉ lên thiết bị thật ở tầng phải xin phép**, và chỉ để **xác nhận lần
    cuối**, không phải để dò tìm. Đó là lý do `--hardware` mặc định tắt.
-3. **Giảm N và nêu rõ.** Nếu buộc phải đo thật, hạ số lần xuống mức nhỏ nhất
+3. **Giảm N và GHI N.** Nếu buộc phải đo thật, hạ số lần xuống mức nhỏ nhất
    còn phân biệt được hai giả thuyết, rồi ghi N vào cột "số lần" — chứ không
-   im lặng đo ít đi.
+   im lặng đo ít đi. N thật của sản phẩm này: tầng `--hardware` có **4 mục**
+   nhưng chỉ **1 mục phát tiếng, đúng 1 lần, clip 2 giây**; ba mục kia chọn
+   đường ít can thiệp nhất mà vẫn phân định được (kiểm **tập loa được chọn**
+   thay vì cast tới nó — dấu vết của lỗi chồng luồng nằm ở siêu dữ liệu, không
+   nằm ở âm thanh). Con số đó ghi trong [[package/eval/README]], không để trong
+   đầu.
 
 Dấu hiệu bạn đang vi phạm: cột "số lần" trong bảng kiểm chứng tăng lên mà không
 ai kịp hỏi *lần này có cần chạy thật không*.
@@ -292,6 +327,21 @@ thuyết phục — hai mẫu, cùng model, cùng hành vi. **Nó sai.** Cả ha
 treo cùng lúc. **Hai mẫu trùng nhau không đủ để suy ra nguyên nhân hệ thống**,
 đặc biệt khi cả hai cùng chịu một điều kiện môi trường (cùng mạng, cùng thời
 điểm, cùng lần mất điện).
+
+🔧 *Biên giới bên trong sản phẩm: danh sách thiết bị đã lưu.* Dò bằng mDNS là
+**lossy** — cùng một mạng, cùng một lệnh, lần này thấy 8 thiết bị, lần sau thấy
+6. Hai hệ quả, cả hai đều đã cắn thật:
+
+- **Lưu là GỘP theo id, không phải ghi đè.** Nếu mỗi lần dò ghi đè danh sách cũ
+  thì **một lần dò sót là mất thiết bị**. Gộp theo `uuid`, cập nhật địa chỉ,
+  giữ lại mục không thấy trong lượt này.
+- **Địa chỉ đã lưu là dữ liệu CÓ HẠN DÙNG.** Thiết bị đổi IP thì mục đã lưu trỏ
+  vào chỗ trống. Đã từng có một dạng lỗi tự mâu thuẫn buồn cười: mDNS sót một
+  thiết bị **đang nằm trong danh sách đã lưu**, và sản phẩm báo
+  `DeviceNotFoundError` cho đúng cái nó vừa liệt kê ra cho người dùng. Cách gỡ:
+  khi mDNS sót, thử **kết nối thẳng vào địa chỉ đã lưu** trước khi báo không
+  tìm thấy. Nhánh còn lại — địa chỉ đã lưu bị cũ vì thiết bị đổi IP nên phải
+  quét lại — vẫn là **CHƯA THỬ** ở sản phẩm này.
 
 🔧 *Một biên giới nữa, dạng khác:* tên máy chứa dấu gạch dưới thì **không bao
 giờ** xin được chứng chỉ TLS — CA/B Forum cấm `_` trong tên máy. Mà Claude
@@ -371,6 +421,19 @@ Trong chính phiên đóng gói này, lượt kiểm ngược đã lộ ra **c�
 - **Thay thế đệ quy.** `module.asyncio` **chính là** module `asyncio` toàn cục,
   nên `module.asyncio.sleep = lambda: ...gọi lại asyncio.sleep` là đệ quy vô
   hạn — và nó hiện ra ở ba mục chẳng liên quan. Giữ tham chiếu gốc, bọc proxy.
+- **Treo ở dọn dẹp.** Nguy hơn sập, và ít người canh. Bước dọn dẹp đóng server
+  HTTP chờ vòng `serve_forever` thoát; lỗi gieo làm vòng đó không bao giờ khởi
+  động → chờ **vĩnh viễn**. Chỗ độc là: khi bài kiểm treo thì `X/Y` **không
+  đếm được nữa** — không có dòng nào in ra để mà so, nên cả cơ chế "đếm đủ
+  trước khi đếm xanh" ở gạch đầu dòng trên cũng bị vô hiệu. Luật: *xanh phải là
+  xanh trong **thời gian hữu hạn***. Mọi dọn dẹp chạm tài nguyên sản phẩm phải
+  có hạn giờ, và **quá hạn tính là ĐỎ, không phải lỗi hạ tầng**.
+- **Lỗi gieo khớp 0 lần trông y hệt lỗi gieo đã đạt.** Sản phẩm đổi một dòng là
+  đoạn mã gốc trong lỗi gieo không còn khớp; nếu bộ kiểm ngược im lặng bỏ qua
+  thì ca đó vẫn "đạt". Luật: khớp **đúng 1 lần**, 0 hoặc >1 đều là **ERROR chặn
+  lượt** kèm câu "mã đã đổi — cập nhật lỗi gieo". Cùng họ: **đối chứng phải khai
+  tường minh danh sách mục nó sẽ chạy** — không khai thì nó chạy bộ lọc rỗng và
+  xanh vì chẳng kiểm gì.
 - **Bằng chứng hết hạn.** Đọc `player_state` ngay lúc lệnh trả về là đòi một
   trạng thái đã qua: đo được `say()` mất 5.4s trong khi clip chỉ 2.26s — lúc trả
   về loa đã phát **xong**. Phải kiểm **dấu vết bền**: `content_id` khớp URL và
@@ -409,11 +472,14 @@ số đếm thật.
 | Cô lập lỗi: 1 loa thật + 1 tên không tồn tại | 2 | **phần tử hỏng** | loa thật nhận đúng audio; phần tử hỏng `error` riêng; tổng thể `ok`; `say()` 5.4s so với clip 2.26s |
 | **TTS dồn 6 yêu cầu song song** | **3**: trước vá / sau vá khoá / sau vá khoá-theo-vòng-lặp | **dịch vụ từ chối kết nối đồng thời** | 4/6 (101s) → 6/6 (12s) → **6/6 (6.2s)**, 0 file 0 byte |
 | Khoá qua 2 vòng lặp có tranh chấp | 2: trước và sau vá | `asyncio.run()` hai lần | trước: vòng 2 `RuntimeError bound to a different event loop`; sau: **cả hai vòng đều chạy** |
-| **Eval offline** | **7 phiên** | không tiếng | 35 → 43 → 67 → 138 → 49 → 77 → **57/57 ĐẠT** (số mục đổi vì cách chia mục đổi) |
-| Eval `--online` | 4 | cần internet | 157 → 49 → 82 → **3/3 ĐẠT** |
-| Eval `--hardware` (xin phép mỗi lần) | 6 | **cast thật, phát tiếng** | 37 → 48 → 67 → 157 → 49 → **78/78, ĐẠT NGAY LẦN ĐẦU** |
-| **Kiểm ngược bài kiểm** | 1 lượt đầy đủ (2026-08-28) | 60 lỗi gieo + 3 đối chứng | **60/60 ĐẠT, phủ 57/57 mục, 56s**; lộ 1 test giả + 1 kỳ vọng sai + 1 lỗi gieo không áp được |
-| **Nghiệm thu DoD trên clone sạch** | 1 (2026-08-28) | cổng rỗi 8797, không đụng service thật | clone → `uv sync` → chạy → initialize 200 → **13 tool** → `list_speakers` trả loa thật; stdio cũng 13 tool |
+| **Eval offline** | **8 phiên** | không tiếng | **số mục eval** qua 8 phiên: 35 → 43 → 67 → 138 → 49 → 77 → 57 → 57; phiên này **57/57 ĐẠT**. Số mục lên xuống vì cách chia mục đổi, không phải vì phạm vi kiểm co lại |
+| Eval `--online` | 4 | cần internet | 157 → 49 → 82 → **3/3 ĐẠT**; lượt 2026-09-07: **60/60 ĐẠT**, dồn 6 yêu cầu xong trong 5.1s |
+| Eval `--hardware` (xin phép mỗi lần) | **7** | **cast thật, phát tiếng** | 37 → 48 → 67 → 157 → 49 → 78/78 đạt ngay lần đầu → **63/64, rồi 64/64 sau khi sửa 2 lỗi của chính bài kiểm**. 6/7 lượt lộ lỗi của bài kiểm, không phải của sản phẩm |
+| **Kiểm ngược bài kiểm** | **2 lượt đầy đủ** (2026-08-28, 2026-09-07) | 60 lỗi gieo + 3 đối chứng | lượt 1: **60/60, phủ 57/57, 56s**, lộ 1 test giả + 1 kỳ vọng sai + 1 lỗi gieo không áp được. Lượt 2: **60/60, phủ 57/57, 57s** |
+| **Hai chốt chặn của bộ kiểm ngược** | 2 (2026-09-07) | ca hỏng cố ý | `run_items` rỗng → ERROR; lỗi gieo khớp 0 lần → ERROR; cả hai **chặn lượt**, exit 1 |
+| **Nghiệm thu DoD — transport stdio** | 1 (2026-09-07) | tiến trình con, stdin/stdout | initialize → `googlecast-mcp 1.29.0`; `tools/list` → **13 tool**; `tools/call list_speakers` → loa thật `Kitchen speaker` |
+| **Nghiệm thu DoD — transport HTTP** | 1 (2026-09-07) | cổng rỗi 8797, không đụng service thật 8765 | initialize → `mcp-session-id`; **13 tool**; `tools/call` → loa thật; `Host: evil.example` → **421**; dọn dẹp trong hạn 10s, cổng trả về trống |
+| **Nghiệm thu DoD trên clone sạch** | 1 (2026-08-28) | môi trường sạch `/tmp/dod-clone` | clone → `uv sync` → chạy → initialize 200 → 13 tool → `list_speakers` trả loa thật |
 
 **Biên và điều kiện xấu đã quan sát được (thật, không phải giả định):** TCP 8009
 refuse → timeout · mDNS sót thiết bị đã lưu → `DeviceNotFoundError` tự mâu
@@ -423,18 +489,38 @@ trình duyệt → 406 (**đúng đặc tả, không phải lỗi**) · prefligh
 lại service khi đang chạy → tiến trình KHÔNG đổi · `all` gồm cả nhóm lẫn thành
 viên → chồng luồng mà API vẫn báo `playing`.
 
-**Quan sát mới trong chính phiên đóng gói này:** `pkill -f "<mẫu>"` khớp luôn
-lệnh bash đang chạy và **tự giết shell** (exit 144) — ngõ cụt này đã **tái hiện
-sống**; cách thoát là lấy PID từ `ss -ltnp` rồi `kill` theo PID. Và: cổng audio
-8766 mở **lười** — `ss` cho thấy service thật chỉ đang nghe 8765, vì chưa `say`
-lần nào kể từ lần khởi động gần nhất; nghĩa là **quét cổng lúc máy vừa khởi
-động sẽ không thấy bề mặt tấn công đó**.
+**Quan sát về môi trường triển khai — dữ liệu, không phải chuyện bên lề.**
+Trạng thái thật của máy đang chạy sản phẩm (cổng nào đang mở, tiến trình nào
+đang sống, dòng lệnh thật là gì) là bằng chứng ngang hàng với kết quả bài kiểm,
+và nó nói những điều bài kiểm không nói.
+
+- **Cổng audio 8766 mở LƯỜI — tái hiện lại ngày 2026-09-07.** `systemctl` báo
+  service `active`, `/proc/<pid>/cmdline` khớp đúng tài liệu, nhưng `ss -ltn`
+  chỉ thấy **`0.0.0.0:8765`**, **không thấy 8766**: media server chỉ bắt đầu
+  nghe sau lần `say` đầu tiên. Hệ quả cho người rà soát an ninh: **quét cổng
+  ngay sau khi máy khởi động sẽ BỎ SÓT** bề mặt tấn công 8766 — nó có thật, chỉ
+  chưa mở lúc quét. Bài học rộng hơn: **"quét không thấy" không đồng nghĩa
+  "không có"**, với bất kỳ tài nguyên nào được mở lười.
+- **Công cụ tự nuốt chính mình.** `pkill -f "<mẫu>"` khớp luôn lệnh bash đang
+  chạy nó và **tự giết shell** (exit 144) — đã tái hiện sống ở hai phiên trước.
+  Phiên này **cố ý không dùng lại**: kịch bản DoD giữ PID từ lúc dựng, và nếu
+  cần dò thì lấy PID từ `ss -ltnp` rồi `kill` theo PID. Ở đây mẫu `-f
+  googlecast-mcp` còn khớp cả **service thật** đang phục vụ hai máy khác — một
+  lệnh dọn dẹp cẩu thả sẽ cắt dịch vụ của người dùng. **Ưu tiên cô lập hơn canh
+  gác.**
+
+**Bài học đắt nhất của cả loạt phiên:** hai lỗi mà lượt `--hardware` gần nhất
+lộ ra đều vi phạm những luật **đã được viết ra thành chữ** trong chính bộ tài
+liệu này. **Biết luật không thay thế được việc chạy thật.** Danh sách luật làm
+cho lỗi dễ nhận ra *sau khi* đã thấy nó; nó không làm cho lỗi không xảy ra.
 
 **CHƯA THỬ** (nói thẳng, đừng suy ra từ im lặng): giọng nam
 `vi-VN-NamMinhNeural` bằng tai · tham số `rate` bằng tai · service sống sót qua
 reboot máy (đã `enable`, chưa reboot) · địa chỉ đã lưu bị cũ vì loa đổi IP →
 nhánh quét lại · chặn IP ở nginx (đã đồng ý bật, hai dòng vẫn đang comment) ·
-MCP elicitation trên client thật.
+MCP elicitation trên client thật · **prompt khởi động ở mục "Đem sang bài khác"
+— CHƯA THỬ trên một thiết bị nào khác Cast**, nên phần chuyển-bài của note này
+là *thiết kế*, chưa phải *bằng chứng*.
 
 ---
 
@@ -453,6 +539,12 @@ thật**: đèn, máy in, robot, cổng thanh toán, máy gửi email.
 5. Nghi mã sau cùng: kiểm **biên giới gần nhất** (TCP, chứ không phải ping).
 6. Bài kiểm chia tầng theo tác dụng phụ; chứng minh nó có răng bằng **gieo lỗi
    có mục tiêu**, kỳ vọng viết trước, gieo vào bản sao.
+7. **"Chạy được" phải chứng minh riêng cho từng ĐƯỜNG VÀO đã khai.** Một MCP
+   server khai hai transport thì phải bắt tay và gọi thật một tool trên **cả
+   hai**: chứng minh trên HTTP không suy ra stdio, vì chúng chỉ dùng chung lớp
+   tool, còn lớp vận chuyển là hai đường khác nhau. Luật này khái quát được:
+   sản phẩm nào có nhiều đường vào (CLI và HTTP, gRPC và REST, web và mobile)
+   thì bằng chứng phải nhân lên theo số đường, không được gộp.
 
 **Prompt khởi động cho bài của bạn.** Điền ba chỗ `<…>` rồi dán cho AI. Đây là
 prompt cho **bài tương tự**, khác với [[reproduce-googlecast-mcp]] — file đó
@@ -488,11 +580,19 @@ Muốn dựng lại **đúng sản phẩm này** thì dùng [[reproduce-googleca
 
 ---
 
-## Phụ lục — định đoạt lỗ hổng sau khi chấm L2
+## Phụ lục — định đoạt lỗ hổng do người đọc sạch nêu
 
-Người đọc sạch (`method-note-evaluator-solo`, context sạch, chấm bằng đề đối
-chứng "MCP máy in nhãn LAN") kết luận **L2** và nêu 7 lỗ hổng. Ghi định đoạt
-từng cái, kể cả cái đã sửa — để lần sau không ai phải đoán cái nào bị bỏ quên.
+Note này đã qua hai lượt chấm bởi `method-note-evaluator-solo` (context sạch,
+đề đối chứng "MCP máy in nhãn LAN"). Bảng dưới ghi **định đoạt từng lỗ hổng**,
+kể cả cái đã sửa, để lần sau không ai phải đoán cái nào bị bỏ quên.
+
+*Mức truyền đạt cố ý KHÔNG ghi ở đây, cũng như không ghi trong frontmatter —
+xem [[packages/googlecast-mcp]]. Lý do: một con số mức nằm trong chính thứ đem
+đi chấm sẽ mồi sẵn kỳ vọng cho người đọc sạch tiếp theo. Ở bản trước, phụ lục
+này còn dán mức ngay trên tiêu đề, và người chấm lượt sau đã chỉ đích danh điều
+đó là tự mồi.*
+
+### Lượt chấm 1
 
 | # | Lỗ hổng | Định đoạt | Làm gì |
 |---|---|---|---|
@@ -502,8 +602,22 @@ từng cái, kể cả cái đã sửa — để lần sau không ai phải đo�
 | 4 | Không nêu xung đột: phép đo lặp lại mà bản thân nó không hoàn tác được | **sửa ngay** | thêm mục *"Khi chính phép đo là hành động không hoàn tác được"* ở Bước 5, ba đường gỡ theo thứ tự. **Đây là lỗ hổng phương pháp thật**, và nó cũng là thiếu sót của bộ luật đóng gói → đã đề xuất vá bản chuẩn ở [[phan-hoi-quy-trinh]] |
 | 5a | Tự khen: *"bằng chứng tốt nhất rằng bước này không phải nghi thức"* | **sửa ngay** | xoá; bằng chứng đã tự nói |
 | 5b | Tự bào chữa: *"đó là quyết định đúng chứ không phải sự lười"* | **sửa ngay** | xoá; luận cứ "thư viện duy nhất còn bảo trì" đã đủ |
-| 5c | `transmission_level: L2` trong frontmatter của chính note | **sửa ngay, theo cách khác** | **bỏ khỏi note**, chỉ giữ ở thẻ đăng ký [[packages/googlecast-mcp]]. Lý do: note tự dán mức cho mình sẽ mồi sẵn kỳ vọng cho người đọc sạch tiếp theo, làm nhiễu chính phép chấm. Mức vẫn tra được, chỉ là không nằm trong thứ đem đi chấm |
+| 5c | mức truyền đạt ghi trong frontmatter của chính note | **sửa ngay, theo cách khác** | **bỏ khỏi note**, chỉ giữ ở thẻ đăng ký [[packages/googlecast-mcp]]. Lý do: note tự dán mức cho mình sẽ mồi sẵn kỳ vọng cho người đọc sạch tiếp theo, làm nhiễu chính phép chấm. Mức vẫn tra được, chỉ là không nằm trong thứ đem đi chấm |
 | 6 | "68 × 10s" đặt cạnh "60 lỗi gieo / 56s" như so sánh trực tiếp | **sửa ngay** | nói rõ 68 là phiên trước, 60 là phiên này, và thứ so được là **chi phí mỗi lỗi gieo** (~10s → ~0,9s) |
 | 7 | Hai hàng "CHƯA ĐẾM (≥9)" và "(≥7)" | **chấp nhận + ghi lý do** | đếm lại bây giờ là **dựng số**; lý do và cận dưới ghi ngay đầu mục "Cách đã kiểm chứng". Đã có mục eval phủ hai kịch bản này nên lần sau có số thật |
 
-Không có lỗ hổng nào bị xếp *ngoài phạm vi*.
+### Lượt chấm 2 — sau khi cập nhật theo v1.10
+
+| # | Lỗ hổng | Định đoạt | Làm gì |
+|---|---|---|---|
+| 1 | Thang "phép đo không hoàn tác" nói **hai lần** (Bước 3 và Bước 5) | **sửa ngay** | giữ bản ở Bước 5 (nơi nó phát sinh tự nhiên từ "đo lại cùng kịch bản"); Bước 3 rút còn một câu + neo sang Bước 5 |
+| 2 | Phụ lục **tự dán mức L**, mâu thuẫn với chính lý do note bỏ mức khỏi frontmatter | **sửa ngay** | xoá mọi ký hiệu mức khỏi tiêu đề và thân phụ lục; giữ bảng lỗ hổng + định đoạt. Bỏ luôn câu tự chấm "không có lỗ hổng nào ngoài phạm vi" |
+| 3 | Mục "Đem sang bài khác" **chưa từng được kiểm** mà không ghi CHƯA THỬ — trong khi note rất nghiêm với CHƯA THỬ ở mọi chỗ khác | **sửa ngay** | thêm một dòng vào mục CHƯA THỬ |
+| 4 | Bước 2 không có prompt gõ lại được (prompt "thật" ở đó không phải prompt cho việc mà bước dạy) | **sửa ngay** | thêm khối "Prompt để bạn gõ lại" cho Bước 2 |
+| 5 | Phân loại "cảm nhận được / xương sống" không có nhánh cho **vùng xám**: thành phần cảm nhận được lại nằm sau hành động không hoàn tác | **sửa ngay** | thêm một đoạn ở cuối Bước 2 nối sang Bước 3 |
+| 6 | "Lưu bền, GỘP theo id" chỉ tồn tại trong prompt, **không bước nào dạy** — trong khi đó là chỗ đã cắn thật | **sửa ngay** | thêm đoạn vào Bước 6, kèm biên "địa chỉ đã lưu là dữ liệu có hạn dùng" |
+| 7 | Dãy số `35 → 43 → …` không có đơn vị | **sửa ngay** | ghi rõ đơn vị là **số mục eval** |
+| 8 | Liên kết dạng ngoặc vuông kép không phân giải được ngoài vault | **chấp nhận + ghi lý do** | thêm một dòng chú ở đầu note nói rõ cách đổi liên kết đó thành đường dẫn. Không rải đường dẫn tương đối cạnh **mọi** liên kết vì sẽ làm nhiễu bản đọc trong vault — nơi note này chủ yếu được đọc |
+
+Không lỗ hổng nào bị xếp *ngoài phạm vi* ở cả hai lượt; mọi mục đều có định đoạt
+tường minh.
